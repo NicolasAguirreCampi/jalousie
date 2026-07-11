@@ -8,6 +8,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.info("Jalousie starting")
         Config.shared.load()
         setupStatusItem()
+        checkAccessibilityPermission()
+    }
+
+    // MARK: - Accessibility permission
+
+    private func checkAccessibilityPermission() {
+        if AXIsProcessTrusted() {
+            Log.info("accessibility: trusted")
+            return
+        }
+
+        Log.warn("accessibility: not trusted — prompting user")
+        NSApp.activate(ignoringOtherApps: true)
+
+        let alert = NSAlert()
+        alert.messageText = "Jalousie needs Accessibility access"
+        alert.informativeText = """
+        Open System Settings → Privacy & Security → Accessibility and enable Jalousie.
+
+        Click Continue to open the system prompt.
+        """
+        alert.addButton(withTitle: "Continue")
+        alert.alertStyle = .informational
+        alert.runModal()
+
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue()
+        let options = [promptKey: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
