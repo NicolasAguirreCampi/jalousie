@@ -9,6 +9,8 @@ Jalousie is a lightweight native macOS window manager built as a proper `.app` b
 
 It lives in the menu bar, has no Dock icon, and is driven entirely by keyboard shortcuts.
 
+**Performance is a first-class requirement.** Every action — tiling, focus, swap, space switch — must feel instantaneous. There are zero animations, zero transitions, and zero delays of any kind. Windows snap to their new positions immediately. This is non-negotiable and applies to every module.
+
 ---
 
 ## Target Environment
@@ -30,6 +32,7 @@ It lives in the menu bar, has no Dock icon, and is driven entirely by keyboard s
 4. **Single binary.** One `.app`, drag to `/Applications`, done.
 5. **Config-driven.** Hotkeys and app blacklist live in `~/.config/jalousie/config.json`, editable without recompiling.
 6. **Minimal UI.** Menu bar icon + dropdown only. No preferences window needed for v1.
+7. **No animations. No transitions. Ever.** Windows must snap to position instantly on every action. Do not use `NSAnimationContext`, `animate(withDuration:)`, `CATransaction`, or any animation API anywhere in the codebase. Do not add `DispatchQueue` delays to smooth visual changes. Snappiness is a core feature, not a preference.
 
 ---
 
@@ -113,6 +116,9 @@ for i, window in managedWindows:
     )
     setFrame(window.axElement, frame)
 ```
+
+**Performance requirement — no animation:**
+Set window position and size via direct AXUIElement calls only. Never wrap these calls in `NSAnimationContext.runAnimationGroup` or any animation block. macOS may apply its own implicit window-move animation — disable it by setting the position and size attributes in a single synchronous block without yielding to the run loop between calls.
 
 **Setting window frame via AXUIElement:**
 ```swift

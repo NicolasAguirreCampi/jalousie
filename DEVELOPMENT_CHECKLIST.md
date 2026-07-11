@@ -2,6 +2,8 @@
 
 Step-by-step build plan. Each phase produces something you can run and verify before moving on. Do not skip verification steps — the whole point is catching errors at the boundary they were introduced.
 
+**Performance is a hard requirement across every phase.** Every visible action must feel instant — no animations, no transitions, no smoothing delays. If a window ever appears to slide, fade, or lag during any verify step, treat it as a failing test and fix it before moving on. The only permitted `DispatchQueue.main.asyncAfter` in the app is the 0.3 s "wait for a new window to exist after app launch" hop — never for smoothing visuals.
+
 ---
 
 ## Phase 0 — Project Scaffold
@@ -87,7 +89,8 @@ Step-by-step build plan. Each phase produces something you can run and verify be
 ## Phase 7 — Tiling (manual trigger)
 
 - [ ] Add `retile()` to `WindowManager` implementing the equal-horizontal-split algorithm
-- [ ] Add `setFrame(of:to:)` helper using `AXValueCreate` for position and size
+- [ ] Add `setFrame(of:to:)` helper using `AXValueCreate` for position and size — position then size in a single synchronous block, no run-loop yield between them
+- [ ] Do **not** wrap any AX call in `NSAnimationContext`, `animate(withDuration:)`, `CATransaction`, or any animation API
 - [ ] Wire the "Retile current space" menu item to `WindowManager.shared.retile()`
 - [ ] Respect `windowGap` from config
 - [ ] **Verify:**
@@ -95,6 +98,7 @@ Step-by-step build plan. Each phase produces something you can run and verify be
   - Three windows → each takes a third
   - Zero/one window → no crash, no change (or single window full screen depending on `ignoreSingleWindow`)
   - Retiling twice in a row is idempotent
+  - **Snap check:** windows jump to their new positions instantly — no slide, no fade, no perceivable delay. Record a screen capture at 60fps if unsure; there should be no in-between frames.
 
 ---
 
@@ -134,7 +138,7 @@ Step-by-step build plan. Each phase produces something you can run and verify be
 - [ ] Find focused window via `AXUIElementCopyAttributeValue(system, kAXFocusedWindowAttribute)`
 - [ ] Clamp at edges
 - [ ] Add temporary menu items to trigger both
-- [ ] **Verify:** with three windows tiled, clicking the menu items moves focus left/right visibly.
+- [ ] **Verify:** with three windows tiled, clicking the menu items moves focus left/right visibly, with no perceivable delay.
 
 ---
 
@@ -143,7 +147,7 @@ Step-by-step build plan. Each phase produces something you can run and verify be
 - [ ] Add `swapLeft()` and `swapRight()` that swap the focused window with its neighbor in the ordered list, then retile
 - [ ] Clamp at edges
 - [ ] Add temporary menu items
-- [ ] **Verify:** swap moves the focused window to the neighbor's slot and vice versa; focus stays on the moved window.
+- [ ] **Verify:** swap moves the focused window to the neighbor's slot and vice versa; focus stays on the moved window; both windows snap instantly with no slide animation.
 
 ---
 
@@ -222,6 +226,8 @@ Step-by-step build plan. Each phase produces something you can run and verify be
 - [ ] Remove temporary debug menu items ("List windows", per-action test items, "Switch to space N" if not needed)
 - [ ] Grep for `print(` — none should remain; all logging goes through `Log`
 - [ ] Grep for force unwraps `!` — each remaining one needs a comment explaining why it is safe
+- [ ] Grep for `NSAnimationContext`, `animate(withDuration`, `CATransaction`, `.animator(` — **zero hits allowed**
+- [ ] Grep for `asyncAfter` — the only legitimate hit is the 0.3 s window-appearance wait in the app-launch handler; anything else must be justified or removed
 - [ ] Confirm every file matches the skill's naming and structure rules
 - [ ] Confirm the code review checklist in `.claude/jalousie-swift-skill.md` passes
 
@@ -233,6 +239,15 @@ Step-by-step build plan. Each phase produces something you can run and verify be
 - [ ] `cp -r build/Build/Products/Release/Jalousie.app /Applications/`
 - [ ] Launch from `/Applications`, re-grant Accessibility for the installed copy
 - [ ] **Verify:** all v1 features work from the installed `.app` for at least 30 minutes of normal use with no crashes.
+
+---
+
+## Performance smoke test
+
+- [ ] Retile 4 windows repeatedly for 30 s — no lag, no dropped frames, no visible animation on any window
+- [ ] Hold down `focus-right` (key repeat) — focus jumps through windows as fast as macOS repeats keys, no queuing lag
+- [ ] Hold down `swap-right` — window keeps snapping to the next slot every keydown with no in-between animation frames
+- [ ] `send-to-space-N` happens in one snap — the window vanishes from the source without a slide
 
 ---
 
