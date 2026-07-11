@@ -1,10 +1,9 @@
 import Cocoa
 
-@main
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSLog("[Jalousie] launched")
+        Log.info("Jalousie starting")
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {
