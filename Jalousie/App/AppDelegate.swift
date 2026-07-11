@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Config.shared.load()
         setupStatusItem()
         checkAccessibilityPermission()
+        WindowManager.shared.start()
     }
 
     // MARK: - Accessibility permission

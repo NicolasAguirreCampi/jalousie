@@ -7,9 +7,9 @@ import CoreGraphics
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
 
-final class WindowManager {
+final class WindowManager: NSObject {
     static let shared = WindowManager()
-    private init() {}
+    private override init() { super.init() }
 
     // Set of window IDs seen on a prior enumeration. Used to keep tile order
     // stable across retiles: known windows keep their visual left-to-right
@@ -20,7 +20,42 @@ final class WindowManager {
     // MARK: - Lifecycle
 
     func start() {
-        // NSWorkspace notifications and the polling timer arrive in later phases.
+        let nc = NSWorkspace.shared.notificationCenter
+        nc.addObserver(self,
+                       selector: #selector(handleAppLaunch(_:)),
+                       name: NSWorkspace.didLaunchApplicationNotification,
+                       object: nil)
+        nc.addObserver(self,
+                       selector: #selector(handleAppTerminate(_:)),
+                       name: NSWorkspace.didTerminateApplicationNotification,
+                       object: nil)
+        nc.addObserver(self,
+                       selector: #selector(handleSpaceChange(_:)),
+                       name: NSWorkspace.activeSpaceDidChangeNotification,
+                       object: nil)
+        Log.info("workspace observers registered")
+    }
+
+    // MARK: - Notification handlers
+
+    @objc private func handleAppLaunch(_ notification: Notification) {
+        guard Config.shared.current.settings.autoTile else { return }
+        // Wait for the new app's first window to actually exist. Not a
+        // smoothing delay — the retile itself is still snap-instant.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.retile()
+        }
+    }
+
+    @objc private func handleAppTerminate(_ notification: Notification) {
+        guard Config.shared.current.settings.autoTile else { return }
+        retile()
+    }
+
+    @objc private func handleSpaceChange(_ notification: Notification) {
+        let settings = Config.shared.current.settings
+        guard settings.autoTile, settings.tileOnSpaceSwitch else { return }
+        retile()
     }
 
     // MARK: - Tiling
@@ -91,17 +126,30 @@ final class WindowManager {
         let known = raw.filter { knownWindowIDs.contains($0.windowID) }
             .sorted { $0.frame.origin.x < $1.frame.origin.x }
 
-        // New windows: append at the right end regardless of the app's chosen
-        // spawn position. Preserves stability of previously-tiled windows.
         let brandNew = raw.filter { !knownWindowIDs.contains($0.windowID) }
 
-        var ordered = known + brandNew
-        for i in ordered.indices { ordered[i].orderIndex = i }
+        let ordered: [ManagedWindow]
+        if known.isEmpty {
+            // Fresh set (e.g. first enumeration, or a space switch left the
+            // cache empty relative to the new space). Sort by current x so
+            // the existing visual layout is preserved instead of being
+            // shuffled into whatever PID order the enumeration returned.
+            ordered = brandNew.sorted { $0.frame.origin.x < $1.frame.origin.x }
+        } else {
+            // Some tiles carry over. Preserve their order and append any new
+            // window at the right end, per spec — a freshly-spawned window
+            // should not displace known tiles.
+            ordered = known + brandNew
+        }
 
-        // Update cache to only include windows that still exist — closed
-        // windows drop off automatically.
-        knownWindowIDs = Set(ordered.map { $0.windowID })
-        return ordered
+        var withIndex = ordered
+        for i in withIndex.indices { withIndex[i].orderIndex = i }
+
+        // Cache the union of what we just saw. Closed windows drop off
+        // automatically; windows from other spaces stay cached so returning
+        // to that space preserves the same-space order across visits.
+        knownWindowIDs.formUnion(withIndex.map { $0.windowID })
+        return withIndex
     }
 
     private func collectRawManagedWindows() -> [ManagedWindow] {
