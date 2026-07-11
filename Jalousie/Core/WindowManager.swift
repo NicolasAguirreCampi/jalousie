@@ -17,6 +17,63 @@ final class WindowManager {
         // NSWorkspace notifications and the polling timer arrive in later phases.
     }
 
+    // MARK: - Tiling
+
+    func retile() {
+        let windows = enumerateManagedWindows()
+        let settings = Config.shared.current.settings
+
+        guard !windows.isEmpty else {
+            Log.info("retile: no managed windows")
+            return
+        }
+        if settings.ignoreSingleWindow && windows.count == 1 {
+            Log.info("retile: single window ignored per config")
+            return
+        }
+        guard let screen = NSScreen.main, let primary = NSScreen.screens.first else {
+            Log.warn("retile: no screen available")
+            return
+        }
+
+        let usable = quartzUsableFrame(for: screen, primary: primary)
+        let count = windows.count
+        let gap = settings.windowGap
+        let totalGap = gap * CGFloat(count - 1)
+        let tileWidth = (usable.width - totalGap) / CGFloat(count)
+
+        for (i, window) in windows.enumerated() {
+            let x = usable.origin.x + (tileWidth + gap) * CGFloat(i)
+            let frame = CGRect(x: x, y: usable.origin.y,
+                               width: tileWidth, height: usable.height)
+            setFrame(of: window.axElement, to: frame)
+        }
+        Log.info("retile: laid out \(count) windows, gap=\(gap)")
+    }
+
+    // NSScreen.visibleFrame is Cocoa (origin bottom-left of the screen),
+    // AX APIs expect Quartz (origin top-left of the primary display).
+    private func quartzUsableFrame(for screen: NSScreen, primary: NSScreen) -> CGRect {
+        let cocoa = screen.visibleFrame
+        let quartzY = primary.frame.height - cocoa.origin.y - cocoa.size.height
+        return CGRect(x: cocoa.origin.x, y: quartzY,
+                      width: cocoa.size.width, height: cocoa.size.height)
+    }
+
+    // Position + size in a single synchronous block — no NSAnimationContext,
+    // no CATransaction, no delays. Snap-instant window moves per the spec.
+    private func setFrame(of element: AXUIElement, to frame: CGRect) {
+        var origin = frame.origin
+        var size = frame.size
+        guard let positionValue = AXValueCreate(.cgPoint, &origin),
+              let sizeValue = AXValueCreate(.cgSize, &size) else {
+            Log.warn("setFrame: could not build AX values")
+            return
+        }
+        AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, positionValue)
+        AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
+    }
+
     // MARK: - Enumeration
 
     func enumerateManagedWindows() -> [ManagedWindow] {

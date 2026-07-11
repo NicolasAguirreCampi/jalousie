@@ -95,7 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func retileClicked() {
-        Log.info("menu: Retile current space (placeholder)")
+        Log.info("menu: Retile current space")
+        WindowManager.shared.retile()
     }
 
     @objc private func reloadConfigClicked() {
