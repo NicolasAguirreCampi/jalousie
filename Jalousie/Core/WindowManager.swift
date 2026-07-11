@@ -11,6 +11,12 @@ final class WindowManager {
     static let shared = WindowManager()
     private init() {}
 
+    // Set of window IDs seen on a prior enumeration. Used to keep tile order
+    // stable across retiles: known windows keep their visual left-to-right
+    // order (sorted by current x), brand-new windows are appended at the
+    // right end regardless of where the app opened them.
+    private var knownWindowIDs: Set<CGWindowID> = []
+
     // MARK: - Lifecycle
 
     func start() {
@@ -77,6 +83,28 @@ final class WindowManager {
     // MARK: - Enumeration
 
     func enumerateManagedWindows() -> [ManagedWindow] {
+        let raw = collectRawManagedWindows()
+
+        // Known windows: keep their visual order (sorted by current x). This
+        // lets the user drag a window between tiles and have subsequent
+        // retiles honor the new position.
+        let known = raw.filter { knownWindowIDs.contains($0.windowID) }
+            .sorted { $0.frame.origin.x < $1.frame.origin.x }
+
+        // New windows: append at the right end regardless of the app's chosen
+        // spawn position. Preserves stability of previously-tiled windows.
+        let brandNew = raw.filter { !knownWindowIDs.contains($0.windowID) }
+
+        var ordered = known + brandNew
+        for i in ordered.indices { ordered[i].orderIndex = i }
+
+        // Update cache to only include windows that still exist — closed
+        // windows drop off automatically.
+        knownWindowIDs = Set(ordered.map { $0.windowID })
+        return ordered
+    }
+
+    private func collectRawManagedWindows() -> [ManagedWindow] {
         let onScreenPIDs = collectOnScreenPIDs()
         let blacklist = Set(Config.shared.current.blacklist)
         var results: [ManagedWindow] = []
@@ -97,10 +125,6 @@ final class WindowManager {
                 results.append(managed)
             }
         }
-
-        // Order by leftmost x — matches the tiling order the spec expects.
-        results.sort { $0.frame.origin.x < $1.frame.origin.x }
-        for i in results.indices { results[i].orderIndex = i }
         return results
     }
 
