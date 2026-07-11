@@ -6,7 +6,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.info("Jalousie starting")
+        logBundledDefaultConfig()
         setupStatusItem()
+    }
+
+    // Phase 3 verify: decode the bundled default JSON and log field counts.
+    // Removed once Config.load() is in place in Phase 4.
+    private func logBundledDefaultConfig() {
+        guard let url = Bundle.main.url(forResource: "jalousie-default", withExtension: "json") else {
+            Log.error("jalousie-default.json not found in bundle")
+            return
+        }
+        do {
+            let data = try Data(contentsOf: url)
+            let config = try JSONDecoder().decode(JalousieConfig.self, from: data)
+            Log.info("default config decoded: hotkeys=\(config.hotkeys.count), blacklist=\(config.blacklist.count), autoTile=\(config.settings.autoTile)")
+        } catch {
+            Log.error("default config decode failed: \(error)")
+        }
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {

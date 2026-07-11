@@ -1,0 +1,26 @@
+{
+  "hotkeys": {
+    "focus-left":        { "key": "j", "modifiers": ["option"] },
+    "focus-right":       { "key": "l", "modifiers": ["option"] },
+    "swap-left":         { "key": "j", "modifiers": ["option", "shift"] },
+    "swap-right":        { "key": "l", "modifiers": ["option", "shift"] },
+    "send-to-space-1":   { "key": "1", "modifiers": ["option", "shift"] },
+    "send-to-space-2":   { "key": "2", "modifiers": ["option", "shift"] },
+    "send-to-space-3":   { "key": "3", "modifiers": ["option", "shift"] },
+    "send-to-space-4":   { "key": "4", "modifiers": ["option", "shift"] },
+    "send-to-space-5":   { "key": "5", "modifiers": ["option", "shift"] }
+  },
+  "blacklist": [
+    "com.apple.finder",
+    "com.apple.systempreferences",
+    "com.apple.ActivityMonitor",
+    "com.apple.Terminal",
+    "com.googlecode.iterm2"
+  ],
+  "settings": {
+    "autoTile": true,
+    "tileOnSpaceSwitch": true,
+    "windowGap": 0,
+    "ignoreSingleWindow": false
+  }
+}
