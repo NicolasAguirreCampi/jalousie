@@ -73,6 +73,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(reloadConfigClicked),
             keyEquivalent: ""
         ))
+        // Phase 6 verification helper. Removed in Phase 20 cleanup.
+        menu.addItem(NSMenuItem(
+            title: "List windows (debug)",
+            action: #selector(listWindowsClicked),
+            keyEquivalent: ""
+        ))
 
         menu.addItem(.separator())
 
@@ -100,5 +106,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quitClicked() {
         Log.info("menu: Quit")
         NSApp.terminate(nil)
+    }
+
+    @objc private func listWindowsClicked() {
+        let windows = WindowManager.shared.enumerateManagedWindows()
+        Log.info("managed windows: \(windows.count)")
+        for window in windows {
+            let f = window.frame
+            Log.info("  [\(window.orderIndex)] \(window.appName) — id=\(window.windowID) bundle=\(window.bundleID) frame=(\(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.size.width))x\(Int(f.size.height)))")
+        }
     }
 }
