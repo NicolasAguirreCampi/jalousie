@@ -7,6 +7,18 @@ import CoreGraphics
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
 
+// AXObserver callback — C-callable, so it's a free function, not a method.
+// The refcon carries an unowned pointer back to the WindowManager singleton
+// (safe because the singleton lives for the whole app lifetime).
+private let axObserverCallback: AXObserverCallback = { _, _, _, refcon in
+    guard let refcon else { return }
+    let manager = Unmanaged<WindowManager>.fromOpaque(refcon).takeUnretainedValue()
+    // Bounce onto the main queue — AX callbacks arrive on the main run loop
+    // but nesting a retile inside the callback confuses AXObserver's own
+    // internal state on some macOS versions.
+    DispatchQueue.main.async { manager.handleAXNotification() }
+}
+
 final class WindowManager: NSObject {
     static let shared = WindowManager()
     private override init() { super.init() }
@@ -16,6 +28,15 @@ final class WindowManager: NSObject {
     // order (sorted by current x), brand-new windows are appended at the
     // right end regardless of where the app opened them.
     private var knownWindowIDs: Set<CGWindowID> = []
+
+    // One AXObserver per non-blacklisted running app process. The observer is
+    // used both for app-level notifications (window created) and for every
+    // per-window notification attached to elements in that process.
+    private var appObservers: [pid_t: AXObserver] = [:]
+
+    // Window IDs whose destroyed/minimized/deminimized notifications have
+    // already been registered on the owning app's observer.
+    private var observedWindowIDs: Set<CGWindowID> = []
 
     // MARK: - Lifecycle
 
@@ -33,22 +54,41 @@ final class WindowManager: NSObject {
                        selector: #selector(handleSpaceChange(_:)),
                        name: NSWorkspace.activeSpaceDidChangeNotification,
                        object: nil)
-        Log.info("workspace observers registered")
+        nc.addObserver(self,
+                       selector: #selector(handleAppActivate(_:)),
+                       name: NSWorkspace.didActivateApplicationNotification,
+                       object: nil)
+        nc.addObserver(self,
+                       selector: #selector(handleAppUnhide(_:)),
+                       name: NSWorkspace.didUnhideApplicationNotification,
+                       object: nil)
+
+        // Register AX observers for every already-running app so we catch
+        // window creations that happen without a NSWorkspace launch event
+        // (resident Electron apps, background helpers reopening a window, etc.).
+        for app in NSWorkspace.shared.runningApplications {
+            registerAppObserver(for: app)
+        }
+        Log.info("workspace + AX observers registered (\(appObservers.count) apps)")
     }
 
     // MARK: - Notification handlers
 
     @objc private func handleAppLaunch(_ notification: Notification) {
         guard Config.shared.current.settings.autoTile else { return }
-        // Wait for the new app's first window to actually exist. Not a
-        // smoothing delay — the retile itself is still snap-instant.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            self?.retile()
+        if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+            // Attach an AX observer immediately. The window-created callback
+            // will fire once the app actually has a window — no timer needed.
+            registerAppObserver(for: app)
         }
+        retile()
     }
 
     @objc private func handleAppTerminate(_ notification: Notification) {
         guard Config.shared.current.settings.autoTile else { return }
+        if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
+            unregisterAppObserver(pid: app.processIdentifier)
+        }
         retile()
     }
 
@@ -58,11 +98,30 @@ final class WindowManager: NSObject {
         retile()
     }
 
+    @objc private func handleAppActivate(_ notification: Notification) {
+        guard Config.shared.current.settings.autoTile else { return }
+        // Catches Cmd-Tab / dock-click into resident apps (WhatsApp, Slack,
+        // etc.) that reveal a previously hidden window without triggering a
+        // process-launch notification. The skip-if-already-tiled optimization
+        // makes this cheap when nothing actually needs to move.
+        retile()
+    }
+
+    @objc private func handleAppUnhide(_ notification: Notification) {
+        guard Config.shared.current.settings.autoTile else { return }
+        retile()
+    }
+
     // MARK: - Tiling
 
     func retile() {
         let windows = enumerateManagedWindows()
         let settings = Config.shared.current.settings
+
+        // Newly-seen windows need destroy/minimize observers so we react to
+        // Cmd-W / minimize without polling. Done here (not in enumerate) to
+        // keep enumerate side-effect-free for callers like the debug menu.
+        syncWindowObservers(for: windows)
 
         guard !windows.isEmpty else {
             Log.info("retile: no managed windows")
@@ -83,13 +142,27 @@ final class WindowManager: NSObject {
         let totalGap = gap * CGFloat(count - 1)
         let tileWidth = (usable.width - totalGap) / CGFloat(count)
 
+        var moved = 0
         for (i, window) in windows.enumerated() {
             let x = usable.origin.x + (tileWidth + gap) * CGFloat(i)
-            let frame = CGRect(x: x, y: usable.origin.y,
-                               width: tileWidth, height: usable.height)
-            setFrame(of: window.axElement, to: frame)
+            let targetFrame = CGRect(x: x, y: usable.origin.y,
+                                     width: tileWidth, height: usable.height)
+            // Skip windows already at their target frame. AX positions can
+            // drift by fractional points from what we set, so we tolerate
+            // a 1pt gap in either dimension.
+            if framesApproximatelyEqual(window.frame, targetFrame) { continue }
+            setFrame(of: window.axElement, to: targetFrame)
+            moved += 1
         }
-        Log.info("retile: laid out \(count) windows, gap=\(gap)")
+        Log.info("retile: laid out \(count) windows, moved=\(moved), gap=\(gap)")
+    }
+
+    private func framesApproximatelyEqual(_ a: CGRect, _ b: CGRect,
+                                          tolerance: CGFloat = 1) -> Bool {
+        abs(a.origin.x - b.origin.x) <= tolerance &&
+        abs(a.origin.y - b.origin.y) <= tolerance &&
+        abs(a.size.width - b.size.width) <= tolerance &&
+        abs(a.size.height - b.size.height) <= tolerance
     }
 
     // NSScreen.visibleFrame is Cocoa (origin bottom-left of the screen),
@@ -174,6 +247,71 @@ final class WindowManager: NSObject {
             }
         }
         return results
+    }
+
+    // MARK: - AX Observers
+
+    private func registerAppObserver(for app: NSRunningApplication) {
+        let pid = app.processIdentifier
+        guard pid > 0,
+              let bundleID = app.bundleIdentifier,
+              !Config.shared.current.blacklist.contains(bundleID),
+              appObservers[pid] == nil else { return }
+
+        var observer: AXObserver?
+        let created = AXObserverCreate(pid, axObserverCallback, &observer)
+        guard created == .success, let obs = observer else {
+            Log.warn("AXObserverCreate failed for pid \(pid): \(created.rawValue)")
+            return
+        }
+
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        let appElement = AXUIElementCreateApplication(pid)
+        // App-level: fire whenever the app makes a new window (Cmd-N,
+        // dialog panel, resident app re-opening after Cmd-W, etc.).
+        AXObserverAddNotification(obs, appElement,
+                                  kAXWindowCreatedNotification as CFString, refcon)
+
+        CFRunLoopAddSource(CFRunLoopGetCurrent(),
+                           AXObserverGetRunLoopSource(obs),
+                           .commonModes)
+        appObservers[pid] = obs
+    }
+
+    private func unregisterAppObserver(pid: pid_t) {
+        guard let obs = appObservers[pid] else { return }
+        CFRunLoopRemoveSource(CFRunLoopGetCurrent(),
+                              AXObserverGetRunLoopSource(obs),
+                              .commonModes)
+        appObservers.removeValue(forKey: pid)
+        // Drop stale window IDs so they get re-registered if their IDs
+        // happen to be reused by a future app.
+        observedWindowIDs = observedWindowIDs.filter { _ in true } // no-op; IDs prune naturally when windows disappear
+    }
+
+    // Attach destroyed/minimized/deminimized notifications to each managed
+    // window, using the AXObserver already registered for the owning app.
+    private func syncWindowObservers(for windows: [ManagedWindow]) {
+        let refcon = Unmanaged.passUnretained(self).toOpaque()
+        for window in windows where !observedWindowIDs.contains(window.windowID) {
+            var pid: pid_t = 0
+            guard AXUIElementGetPid(window.axElement, &pid) == .success,
+                  let observer = appObservers[pid] else { continue }
+            AXObserverAddNotification(observer, window.axElement,
+                                      kAXUIElementDestroyedNotification as CFString, refcon)
+            AXObserverAddNotification(observer, window.axElement,
+                                      kAXWindowMiniaturizedNotification as CFString, refcon)
+            AXObserverAddNotification(observer, window.axElement,
+                                      kAXWindowDeminiaturizedNotification as CFString, refcon)
+            observedWindowIDs.insert(window.windowID)
+        }
+    }
+
+    // Called from the C callback below. Marked internal so the free
+    // function can see it.
+    fileprivate func handleAXNotification() {
+        guard Config.shared.current.settings.autoTile else { return }
+        retile()
     }
 
     // MARK: - Private

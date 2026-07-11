@@ -33,6 +33,7 @@ It lives in the menu bar, has no Dock icon, and is driven entirely by keyboard s
 5. **Config-driven.** Hotkeys and app blacklist live in `~/.config/jalousie/config.json`, editable without recompiling.
 6. **Minimal UI.** Menu bar icon + dropdown only. No preferences window needed for v1.
 7. **No animations. No transitions. Ever.** Windows must snap to position instantly on every action. Do not use `NSAnimationContext`, `animate(withDuration:)`, `CATransaction`, or any animation API anywhere in the codebase. Do not add `DispatchQueue` delays to smooth visual changes. Snappiness is a core feature, not a preference.
+8. **No timers, no polling.** Every reaction to window / app / space state is event-driven. Use `AXObserver` for window lifecycle (created / destroyed / minimized / deminimized) and `NSWorkspace.NotificationCenter` for app lifecycle. `Timer`, `scheduledTimer`, `DispatchSourceTimer`, and `DispatchQueue.main.asyncAfter` must not appear in the app.
 
 ---
 
@@ -133,13 +134,19 @@ func setFrame(_ element: AXUIElementRef, _ frame: CGRect) {
 ```
 
 **Auto-retile triggers (NSWorkspace notifications):**
-- `NSWorkspace.didLaunchApplicationNotification` → wait 0.3s for window to appear, then retile
-- `NSWorkspace.didTerminateApplicationNotification` → retile
-- `NSWorkspace.activeSpaceDidChangeNotification` → retile current space
+- `NSWorkspace.didLaunchApplicationNotification` → register an AXObserver on the new app and retile immediately (the app's window-created event will fire once its window actually exists)
+- `NSWorkspace.didTerminateApplicationNotification` → unregister the app's AXObserver and retile
+- `NSWorkspace.activeSpaceDidChangeNotification` → retile the newly-active space (gated on `settings.tileOnSpaceSwitch`)
+- `NSWorkspace.didActivateApplicationNotification` → retile (catches Cmd-Tab / dock-click into resident Electron-style apps like WhatsApp, Slack, VS Code, which reveal a hidden window without firing a launch event)
+- `NSWorkspace.didUnhideApplicationNotification` → retile (Cmd-H toggle reveal)
 
-**Also observe via CGEventTap or polling (250ms timer):**
-- Detect when a new window appears on screen (window count change)
-- Detect when a window is closed mid-session (not just app quit)
+**Mid-session window changes — event-driven, no polling:**
+Register a per-process `AXObserver` for every non-blacklisted running app and subscribe to:
+- `kAXWindowCreatedNotification` on the app element — fires on Cmd-N, dialog panels, resident apps re-opening a window after Cmd-W
+- `kAXUIElementDestroyedNotification` on each managed window — fires on Cmd-W
+- `kAXWindowMiniaturizedNotification` / `kAXWindowDeminiaturizedNotification` on each managed window
+
+All observer callbacks funnel into `retile()`. **No timers, no polling anywhere in the app** — window lifecycle is entirely event-driven.
 
 **Swap algorithm:**
 ```

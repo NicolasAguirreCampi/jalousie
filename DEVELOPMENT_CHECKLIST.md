@@ -2,7 +2,7 @@
 
 Step-by-step build plan. Each phase produces something you can run and verify before moving on. Do not skip verification steps — the whole point is catching errors at the boundary they were introduced.
 
-**Performance is a hard requirement across every phase.** Every visible action must feel instant — no animations, no transitions, no smoothing delays. If a window ever appears to slide, fade, or lag during any verify step, treat it as a failing test and fix it before moving on. The only permitted `DispatchQueue.main.asyncAfter` in the app is the 0.3 s "wait for a new window to exist after app launch" hop — never for smoothing visuals.
+**Performance is a hard requirement across every phase.** Every visible action must feel instant — no animations, no transitions, no smoothing delays. If a window ever appears to slide, fade, or lag during any verify step, treat it as a failing test and fix it before moving on. **No timers, no polling, no `asyncAfter` scheduling anywhere in the app.** Window-lifecycle changes are detected via AXObservers (event-driven); the only reason to reach for a delay would be to smooth visuals, which is banned.
 
 ---
 
@@ -113,22 +113,37 @@ Step-by-step build plan. Each phase produces something you can run and verify be
 ## Phase 9 — Auto-Retile on Workspace Events
 
 - [ ] In `WindowManager.start()` register for `didLaunchApplicationNotification`, `didTerminateApplicationNotification`, `activeSpaceDidChangeNotification`
-- [ ] Launch handler waits 0.3s then retiles
+- [ ] Also register `didActivateApplicationNotification` and `didUnhideApplicationNotification` — resident apps (WhatsApp, Slack, VS Code) reveal windows on Cmd-Tab / dock click without firing a process-launch event
 - [ ] Terminate handler retiles immediately
+- [ ] Launch handler retiles immediately too — the AXObserver added in Phase 10 catches the actual window-created event, so no `asyncAfter` delay is needed
 - [ ] Space change handler retiles only if `settings.tileOnSpaceSwitch` is true
 - [ ] Gate all of it on `settings.autoTile`
+- [ ] Before calling `setFrame`, skip windows already at their target frame (small tolerance) so repeat retiles and space switches to already-tiled spaces are essentially free
 - [ ] **Verify:**
   - Opening a new app auto-tiles all windows
   - Closing an app auto-tiles the remainder
+  - Cmd-Tab or dock-click to a resident app (WhatsApp) auto-tiles
   - Setting `autoTile = false` in config and reloading disables the behavior
+  - Second retile with unchanged layout logs `moved=0`
 
 ---
 
-## Phase 10 — Mid-session Window Add/Remove Detection
+## Phase 10 — Mid-session Window Add/Remove Detection (event-driven)
 
-- [ ] Add a 250ms `Timer` that polls the window count and triggers retile when the set changes
-- [ ] Debounce so a burst of changes results in one retile
-- [ ] **Verify:** opening a second window of an already-running app (Cmd-N in a text editor) triggers a retile.
+The spec's original polling-timer approach was replaced with event-driven `AXObserver` notifications. No timers, no polling.
+
+- [ ] Add `appObservers: [pid_t: AXObserver]` and `observedWindowIDs: Set<CGWindowID>` state to `WindowManager`
+- [ ] Free-standing C-callable `axObserverCallback` that bounces onto the main queue and calls `WindowManager.shared.retile()`
+- [ ] `registerAppObserver(for:)`: create one AXObserver per non-blacklisted running app, subscribe to `kAXWindowCreatedNotification` on the app element, add source to the main run loop
+- [ ] `unregisterAppObserver(pid:)`: remove run-loop source and drop from the map on app termination
+- [ ] `syncWindowObservers(for:)` called from `retile()`: for each managed window not yet observed, add `kAXUIElementDestroyedNotification`, `kAXWindowMiniaturizedNotification`, `kAXWindowDeminiaturizedNotification` on the owning app's observer
+- [ ] In `WindowManager.start()`, register app observers for every currently-running app so we cover the boot-time set, not just apps that launch after Jalousie starts
+- [ ] Wire `didLaunchApplicationNotification` to `registerAppObserver(for:)` and `didTerminateApplicationNotification` to `unregisterAppObserver(pid:)`
+- [ ] **Verify:**
+  - `Cmd-N` in an already-running app (Firefox, Xcode) triggers a retile immediately
+  - `Cmd-W` closing just a window while the app stays alive triggers a retile
+  - Yellow-button minimize drops the window out of the layout; deminimize brings it back
+  - No `Timer`, `scheduledTimer`, `DispatchSourceTimer`, or `asyncAfter` calls anywhere in the app
 
 ---
 
@@ -227,7 +242,7 @@ Step-by-step build plan. Each phase produces something you can run and verify be
 - [ ] Grep for `print(` — none should remain; all logging goes through `Log`
 - [ ] Grep for force unwraps `!` — each remaining one needs a comment explaining why it is safe
 - [ ] Grep for `NSAnimationContext`, `animate(withDuration`, `CATransaction`, `.animator(` — **zero hits allowed**
-- [ ] Grep for `asyncAfter` — the only legitimate hit is the 0.3 s window-appearance wait in the app-launch handler; anything else must be justified or removed
+- [ ] Grep for `Timer`, `scheduledTimer`, `DispatchSourceTimer`, `asyncAfter` — **zero hits allowed** (window-lifecycle detection is fully event-driven via AXObservers)
 - [ ] Confirm every file matches the skill's naming and structure rules
 - [ ] Confirm the code review checklist in `.claude/jalousie-swift-skill.md` passes
 
