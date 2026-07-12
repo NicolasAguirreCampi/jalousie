@@ -229,10 +229,10 @@ The spec's original polling-timer approach was replaced with event-driven `AXObs
 
 ## Phase 19 — Config Hot-Reload End-to-End
 
-- [ ] Ensure `Config.reload()` calls `HotkeyManager.shared.rebuildHotkeys()`
-- [ ] Ensure changing `blacklist` in the file and reloading affects the next enumeration
-- [ ] Ensure changing `windowGap` and reloading affects the next retile
-- [ ] **Verify:** edit config, click "Reload config", changes take effect without a relaunch.
+- [x] Ensure `Config.reload()` calls `HotkeyManager.shared.rebuildHotkeys()`
+- [x] Ensure changing `blacklist` in the file and reloading affects the next enumeration
+- [x] Ensure changing `windowGap` and reloading affects the next retile
+- [x] **Verify:** edit config, click "Reload config", changes take effect without a relaunch.
 
 ---
 
