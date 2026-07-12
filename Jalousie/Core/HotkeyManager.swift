@@ -117,9 +117,8 @@ final class HotkeyManager {
         case .swapRight:  WindowManager.shared.swapRight()
         case .retile:     WindowManager.shared.retile()
         case .reloadConfig: Config.shared.reload()
-        case .sendToSpace, .switchToSpace:
-            // Space actions land in Phase 18 once SpaceManager exists.
-            Log.info("dispatch: space actions not yet wired")
+        case .sendToSpace(let index):   SpaceManager.shared.sendFocusedWindowToSpace(index)
+        case .switchToSpace(let index): SpaceManager.shared.switchToSpace(at: index)
         }
     }
 

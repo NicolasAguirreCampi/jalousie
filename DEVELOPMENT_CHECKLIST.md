@@ -221,9 +221,9 @@ The spec's original polling-timer approach was replaced with event-driven `AXObs
 
 ## Phase 18 — Space Hotkeys
 
-- [ ] Wire `sendToSpace(N)` and `switchToSpace(N)` in `HotkeyManager.dispatch`
-- [ ] Parse the digit keys `1..9` correctly
-- [ ] **Verify:** all `send-to-space-N` bindings from the default config work from the keyboard.
+- [x] Wire `sendToSpace(N)` and `switchToSpace(N)` in `HotkeyManager.dispatch`
+- [x] Parse the digit keys `1..9` correctly
+- [x] **Verify:** all `send-to-space-N` bindings from the default config work from the keyboard.
 
 ---
 
