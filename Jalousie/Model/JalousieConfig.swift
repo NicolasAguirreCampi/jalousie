@@ -37,7 +37,6 @@ extension JalousieConfig {
             "com.apple.systempreferences",
             "com.apple.ActivityMonitor",
             "com.apple.Terminal",
-            "com.googlecode.iterm2",
         ],
         settings: Settings(
             autoTile: true,

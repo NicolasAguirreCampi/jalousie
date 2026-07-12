@@ -168,13 +168,13 @@ The spec's original polling-timer approach was replaced with event-driven `AXObs
 
 ## Phase 13 — Hotkey Manager (dispatch to logs first)
 
-- [ ] Create `Model/WMAction.swift` enum: `focusLeft`, `focusRight`, `swapLeft`, `swapRight`, `sendToSpace(Int)`, `switchToSpace(Int)`, `retile`, `reloadConfig`
-- [ ] Create `Core/HotkeyManager.swift` singleton with `start()`, `rebuildHotkeys()`
-- [ ] Parse hotkeys from `Config.shared.current.hotkeys`: string key → `CGKeyCode`, modifier strings → `CGEventFlags`
-- [ ] Set up `CGEventTap` on `.cgSessionEventTap` for keydown events
-- [ ] In the callback, match against the loaded hotkeys; on match, `Log.info("dispatch \(action)")` and return `nil` to suppress
-- [ ] Call `HotkeyManager.shared.start()` from `AppDelegate`
-- [ ] **Verify:**
+- [x] Create `Model/WMAction.swift` enum: `focusLeft`, `focusRight`, `swapLeft`, `swapRight`, `sendToSpace(Int)`, `switchToSpace(Int)`, `retile`, `reloadConfig`
+- [x] Create `Core/HotkeyManager.swift` singleton with `start()`, `rebuildHotkeys()`
+- [x] Parse hotkeys from `Config.shared.current.hotkeys`: string key → `CGKeyCode`, modifier strings → `CGEventFlags`
+- [x] Set up `CGEventTap` on `.cgSessionEventTap` for keydown events
+- [x] In the callback, match against the loaded hotkeys; on match, `Log.info("dispatch \(action)")` and return `nil` to suppress
+- [x] Call `HotkeyManager.shared.start()` from `AppDelegate`
+- [x] **Verify:**
   - Log line appears when pressing each configured shortcut
   - Non-matching keys pass through normally (typing still works)
   - "Reload config" rebuilds hotkeys with new bindings

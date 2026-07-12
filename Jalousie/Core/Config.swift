@@ -20,6 +20,7 @@ final class Config {
     func reload() {
         current = decodeFromDisk()
         Log.info("config reloaded: hotkeys=\(current.hotkeys.count), blacklist=\(current.blacklist.count), autoTile=\(current.settings.autoTile)")
+        HotkeyManager.shared.rebuildHotkeys()
     }
 
     // MARK: - Paths

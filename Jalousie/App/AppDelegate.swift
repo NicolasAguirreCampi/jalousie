@@ -10,6 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         checkAccessibilityPermission()
         WindowManager.shared.start()
+        HotkeyManager.shared.start()
     }
 
     // MARK: - Accessibility permission
