@@ -6,6 +6,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.info("Jalousie starting")
+        // Phase 15 sanity check: confirms the CGSPrivate bridging header is
+        // wired up. A non-zero connection ID means the private symbol
+        // resolved at load time; zero would indicate a broken bridge.
+        Log.info("CGS main connection id: \(CGSMainConnectionID())")
         Config.shared.load()
         setupStatusItem()
         checkAccessibilityPermission()

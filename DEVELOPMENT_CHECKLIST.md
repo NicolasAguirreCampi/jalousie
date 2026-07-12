@@ -192,11 +192,11 @@ The spec's original polling-timer approach was replaced with event-driven `AXObs
 
 ## Phase 15 — CGSPrivate Bridging
 
-- [ ] Create `Headers/CGSPrivate.h` declaring only the functions listed in the spec
-- [ ] Create `Headers/Jalousie-Bridging-Header.h` importing `CGSPrivate.h`
-- [ ] Set the bridging header path in Build Settings
-- [ ] Link `ApplicationServices.framework` and `CoreGraphics.framework` (they are usually auto-linked; verify)
-- [ ] **Verify:** call `CGSMainConnectionID()` from `AppDelegate` at startup and log the result — it should be non-zero.
+- [x] Create `Headers/CGSPrivate.h` declaring only the functions listed in the spec
+- [x] Create `Headers/Jalousie-Bridging-Header.h` importing `CGSPrivate.h`
+- [x] Set the bridging header path in Build Settings
+- [x] Link `ApplicationServices.framework` and `CoreGraphics.framework` (they are usually auto-linked; verify)
+- [x] **Verify:** call `CGSMainConnectionID()` from `AppDelegate` at startup and log the result — it should be non-zero.
 
 ---
 

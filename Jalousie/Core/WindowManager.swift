@@ -218,12 +218,12 @@ final class WindowManager: NSObject {
         // focus (clicking a debug menu item), system-wide can return nothing —
         // fall back to NSWorkspace's frontmost app and query its focused
         // window directly, which stays valid across the menu interaction.
-        if let id = systemWideFocusedWindowID(),
-           let idx = windows.firstIndex(where: { $0.windowID == id }) {
+        let sysID = systemWideFocusedWindowID()
+        if let id = sysID, let idx = windows.firstIndex(where: { $0.windowID == id }) {
             return idx
         }
-        if let id = frontmostAppFocusedWindowID(),
-           let idx = windows.firstIndex(where: { $0.windowID == id }) {
+        let frontID = frontmostAppFocusedWindowID()
+        if let id = frontID, let idx = windows.firstIndex(where: { $0.windowID == id }) {
             return idx
         }
         return nil
@@ -290,16 +290,26 @@ final class WindowManager: NSObject {
     // MARK: - Focus (helpers)
 
     private func raiseFocus(to window: ManagedWindow) {
-        // Two steps: activate the owning app so it takes keyboard focus, then
-        // AXRaise the window so it comes to the front within that app.
         var pid: pid_t = 0
-        if AXUIElementGetPid(window.axElement, &pid) == .success,
-           let app = NSRunningApplication(processIdentifier: pid) {
-            // Polite `activate(options: [])` is a no-op when the caller isn't
-            // frontmost — and Jalousie (LSUIElement) never is. Ignoring other
-            // apps is required to actually steal focus from Xcode, Firefox, etc.
-            app.activate(options: [.activateIgnoringOtherApps])
+        guard AXUIElementGetPid(window.axElement, &pid) == .success else { return }
+
+        // NSRunningApplication.activate is a cooperative API on macOS 14+ —
+        // when the previous frontmost app (notably Xcode) refuses to yield,
+        // it returns false and the target never becomes frontmost. Try it
+        // first because it's the "polite" path; fall back to the AX
+        // frontmost attribute, which honors our Accessibility permission and
+        // bypasses cooperative activation.
+        var activated = false
+        if let app = NSRunningApplication(processIdentifier: pid) {
+            activated = app.activate(options: [.activateIgnoringOtherApps])
         }
+        if !activated {
+            let appElement = AXUIElementCreateApplication(pid)
+            AXUIElementSetAttributeValue(appElement,
+                                         kAXFrontmostAttribute as CFString,
+                                         kCFBooleanTrue)
+        }
+        // Bring the specific window to the top within the app and mark it main.
         AXUIElementSetAttributeValue(window.axElement,
                                      kAXMainAttribute as CFString,
                                      kCFBooleanTrue)
