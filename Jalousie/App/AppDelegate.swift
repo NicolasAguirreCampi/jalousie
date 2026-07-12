@@ -107,6 +107,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(swapRightClicked),
             keyEquivalent: ""
         ))
+        // Phase 16 verification helpers. Removed in Phase 20 cleanup.
+        for spaceIndex in 1...5 {
+            let item = NSMenuItem(
+                title: "Switch to space \(spaceIndex) (debug)",
+                action: #selector(switchToSpaceClicked(_:)),
+                keyEquivalent: ""
+            )
+            item.tag = spaceIndex
+            menu.addItem(item)
+        }
 
         menu.addItem(.separator())
 
@@ -155,6 +165,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func swapRightClicked() {
         Log.info("menu: Swap right")
         WindowManager.shared.swapRight()
+    }
+
+    @objc private func switchToSpaceClicked(_ sender: NSMenuItem) {
+        let index = sender.tag
+        Log.info("menu: Switch to space \(index)")
+        let before = SpaceManager.shared.currentSpaceID().map(String.init) ?? "nil"
+        SpaceManager.shared.switchToSpace(at: index)
+        let after = SpaceManager.shared.currentSpaceID().map(String.init) ?? "nil"
+        Log.info("space: before=\(before) after=\(after)")
     }
 
     @objc private func listWindowsClicked() {

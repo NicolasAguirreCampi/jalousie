@@ -202,12 +202,12 @@ The spec's original polling-timer approach was replaced with event-driven `AXObs
 
 ## Phase 16 — Space Query + Switch
 
-- [ ] Create `Core/SpaceManager.swift` singleton
-- [ ] Add `currentSpaceID()` using `CGSGetActiveSpace(CGSMainConnectionID())`
-- [ ] Add `switchToSpace(at index: Int)` using `CGSCopySpaces` + `CGSShowSpaces`/`CGSHideSpaces`
-- [ ] Validate connection and index before every CGS call
-- [ ] Add temporary menu items "Switch to space 1..N"
-- [ ] **Verify:** menu item switches spaces on a Mac configured with multiple spaces. Log the space list before/after.
+- [x] Create `Core/SpaceManager.swift` singleton
+- [x] Add `currentSpaceID()` using `CGSGetActiveSpace(CGSMainConnectionID())`
+- [x] Add `switchToSpace(at index: Int)` using `CGSCopySpaces` + `CGSShowSpaces`/`CGSHideSpaces`
+- [x] Validate connection and index before every CGS call
+- [x] Add temporary menu items "Switch to space 1..N"
+- [x] **Verify:** menu item switches spaces on a Mac configured with multiple spaces. Log the space list before/after.
 
 ---
 
