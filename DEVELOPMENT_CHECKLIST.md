@@ -238,13 +238,13 @@ The spec's original polling-timer approach was replaced with event-driven `AXObs
 
 ## Phase 20 — Cleanup Pass
 
-- [ ] Remove temporary debug menu items ("List windows", per-action test items, "Switch to space N" if not needed)
-- [ ] Grep for `print(` — none should remain; all logging goes through `Log`
-- [ ] Grep for force unwraps `!` — each remaining one needs a comment explaining why it is safe
-- [ ] Grep for `NSAnimationContext`, `animate(withDuration`, `CATransaction`, `.animator(` — **zero hits allowed**
-- [ ] Grep for `Timer`, `scheduledTimer`, `DispatchSourceTimer`, `asyncAfter` — **zero hits allowed** (window-lifecycle detection is fully event-driven via AXObservers)
-- [ ] Confirm every file matches the skill's naming and structure rules
-- [ ] Confirm the code review checklist in `.claude/jalousie-swift-skill.md` passes
+- [x] Remove temporary debug menu items ("List windows", per-action test items, "Switch to space N" if not needed)
+- [x] Grep for `print(` — none should remain; all logging goes through `Log`
+- [x] Grep for force unwraps `!` — each remaining one needs a comment explaining why it is safe
+- [x] Grep for `NSAnimationContext`, `animate(withDuration`, `CATransaction`, `.animator(` — **zero hits allowed**
+- [x] Grep for `Timer`, `scheduledTimer`, `DispatchSourceTimer`, `asyncAfter` — **zero hits allowed** (window-lifecycle detection is fully event-driven via AXObservers)
+- [x] Confirm every file matches the skill's naming and structure rules
+- [x] Confirm the code review checklist in `.claude/jalousie-swift-skill.md` passes
 
 ---
 

@@ -246,6 +246,7 @@ final class WindowManager: NSObject {
               let cf = value,
               CFGetTypeID(cf) == AXUIElementGetTypeID() else { return nil }
         var id: CGWindowID = 0
+        // Safe: guarded by CFGetTypeID(cf) == AXUIElementGetTypeID() above.
         guard _AXUIElementGetWindow(cf as! AXUIElement, &id) == .success, id != 0 else {
             return nil
         }
@@ -263,6 +264,7 @@ final class WindowManager: NSObject {
               let cf = value,
               CFGetTypeID(cf) == AXUIElementGetTypeID() else { return nil }
         var id: CGWindowID = 0
+        // Safe: guarded by CFGetTypeID(cf) == AXUIElementGetTypeID() above.
         guard _AXUIElementGetWindow(cf as! AXUIElement, &id) == .success, id != 0 else {
             return nil
         }
@@ -420,9 +422,6 @@ final class WindowManager: NSObject {
                               AXObserverGetRunLoopSource(obs),
                               .commonModes)
         appObservers.removeValue(forKey: pid)
-        // Drop stale window IDs so they get re-registered if their IDs
-        // happen to be reused by a future app.
-        observedWindowIDs = observedWindowIDs.filter { _ in true } // no-op; IDs prune naturally when windows disappear
     }
 
     // Attach destroyed/minimized/deminimized notifications to each managed
@@ -510,6 +509,7 @@ final class WindowManager: NSObject {
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let cf = value, CFGetTypeID(cf) == AXValueGetTypeID() else { return nil }
         var point = CGPoint.zero
+        // Safe: guarded by CFGetTypeID(cf) == AXValueGetTypeID() above.
         AXValueGetValue(cf as! AXValue, .cgPoint, &point)
         return point
     }
@@ -519,6 +519,7 @@ final class WindowManager: NSObject {
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let cf = value, CFGetTypeID(cf) == AXValueGetTypeID() else { return nil }
         var size = CGSize.zero
+        // Safe: guarded by CFGetTypeID(cf) == AXValueGetTypeID() above.
         AXValueGetValue(cf as! AXValue, .cgSize, &size)
         return size
     }
