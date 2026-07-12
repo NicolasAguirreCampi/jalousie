@@ -80,6 +80,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(listWindowsClicked),
             keyEquivalent: ""
         ))
+        // Phase 11 verification helpers. Removed in Phase 20 cleanup.
+        menu.addItem(NSMenuItem(
+            title: "Focus left (debug)",
+            action: #selector(focusLeftClicked),
+            keyEquivalent: ""
+        ))
+        menu.addItem(NSMenuItem(
+            title: "Focus right (debug)",
+            action: #selector(focusRightClicked),
+            keyEquivalent: ""
+        ))
 
         menu.addItem(.separator())
 
@@ -108,6 +119,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quitClicked() {
         Log.info("menu: Quit")
         NSApp.terminate(nil)
+    }
+
+    @objc private func focusLeftClicked() {
+        Log.info("menu: Focus left")
+        WindowManager.shared.focusLeft()
+    }
+
+    @objc private func focusRightClicked() {
+        Log.info("menu: Focus right")
+        WindowManager.shared.focusRight()
     }
 
     @objc private func listWindowsClicked() {

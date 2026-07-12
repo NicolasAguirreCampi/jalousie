@@ -14,8 +14,7 @@
     "com.apple.finder",
     "com.apple.systempreferences",
     "com.apple.ActivityMonitor",
-    "com.apple.Terminal",
-    "com.googlecode.iterm2"
+    "com.apple.Terminal"
   ],
   "settings": {
     "autoTile": true,

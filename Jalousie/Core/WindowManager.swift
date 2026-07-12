@@ -188,6 +188,87 @@ final class WindowManager: NSObject {
         AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
     }
 
+    // MARK: - Focus
+
+    func focusLeft() { shiftFocus(by: -1) }
+    func focusRight() { shiftFocus(by: +1) }
+
+    private func shiftFocus(by delta: Int) {
+        let windows = enumerateManagedWindows()
+        guard !windows.isEmpty else { return }
+        guard let currentIndex = focusedWindowIndex(in: windows) else {
+            Log.info("focus: no focused managed window")
+            return
+        }
+        let target = currentIndex + delta
+        // Clamp at edges — a no-op at the boundary rather than a wrap-around
+        // matches how yabai/Rectangle behave and avoids surprise jumps.
+        guard target >= 0, target < windows.count, target != currentIndex else { return }
+        raiseFocus(to: windows[target])
+    }
+
+    private func focusedWindowIndex(in windows: [ManagedWindow]) -> Int? {
+        // Try system-wide focused window first. When the menu extra swallows
+        // focus (clicking a debug menu item), system-wide can return nothing —
+        // fall back to NSWorkspace's frontmost app and query its focused
+        // window directly, which stays valid across the menu interaction.
+        if let id = systemWideFocusedWindowID(),
+           let idx = windows.firstIndex(where: { $0.windowID == id }) {
+            return idx
+        }
+        if let id = frontmostAppFocusedWindowID(),
+           let idx = windows.firstIndex(where: { $0.windowID == id }) {
+            return idx
+        }
+        return nil
+    }
+
+    private func systemWideFocusedWindowID() -> CGWindowID? {
+        let systemElement = AXUIElementCreateSystemWide()
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(systemElement,
+                                            kAXFocusedWindowAttribute as CFString,
+                                            &value) == .success,
+              let cf = value,
+              CFGetTypeID(cf) == AXUIElementGetTypeID() else { return nil }
+        var id: CGWindowID = 0
+        guard _AXUIElementGetWindow(cf as! AXUIElement, &id) == .success, id != 0 else {
+            return nil
+        }
+        return id
+    }
+
+    private func frontmostAppFocusedWindowID() -> CGWindowID? {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
+        let pid = app.processIdentifier
+        let appElement = AXUIElementCreateApplication(pid)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(appElement,
+                                            kAXFocusedWindowAttribute as CFString,
+                                            &value) == .success,
+              let cf = value,
+              CFGetTypeID(cf) == AXUIElementGetTypeID() else { return nil }
+        var id: CGWindowID = 0
+        guard _AXUIElementGetWindow(cf as! AXUIElement, &id) == .success, id != 0 else {
+            return nil
+        }
+        return id
+    }
+
+    private func raiseFocus(to window: ManagedWindow) {
+        // Two steps: activate the owning app so it takes keyboard focus, then
+        // AXRaise the window so it comes to the front within that app.
+        var pid: pid_t = 0
+        if AXUIElementGetPid(window.axElement, &pid) == .success,
+           let app = NSRunningApplication(processIdentifier: pid) {
+            app.activate(options: [])
+        }
+        AXUIElementSetAttributeValue(window.axElement,
+                                     kAXMainAttribute as CFString,
+                                     kCFBooleanTrue)
+        AXUIElementPerformAction(window.axElement, kAXRaiseAction as CFString)
+    }
+
     // MARK: - Enumeration
 
     func enumerateManagedWindows() -> [ManagedWindow] {
