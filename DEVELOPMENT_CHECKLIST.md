@@ -213,9 +213,9 @@ The spec's original polling-timer approach was replaced with event-driven `AXObs
 
 ## Phase 17 — Send Focused Window to Space
 
-- [ ] Add `sendFocusedWindowToSpace(_ index: Int)` using `CGSMoveWindowsToManagedSpace`
-- [ ] After the move, retile the source space; optionally follow to the destination
-- [ ] **Verify:** focused window disappears from the source space and reappears on the target space. Focus behavior matches expectation.
+- [x] Add `sendFocusedWindowToSpace(_ index: Int)` using `CGSMoveWindowsToManagedSpace`
+- [x] After the move, retile the source space; optionally follow to the destination
+- [x] **Verify:** focused window disappears from the source space and reappears on the target space. Focus behavior matches expectation.
 
 ---
 

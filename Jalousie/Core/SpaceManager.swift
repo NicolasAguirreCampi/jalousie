@@ -62,4 +62,38 @@ final class SpaceManager {
         CGSHideSpaces(conn, [NSNumber(value: currentID)])
         Log.info("space: switched to index \(index) (id=\(target))")
     }
+
+    // MARK: - Move window
+
+    // Move the currently focused managed window to the space at the given
+    // 1-based index, then retile the source space so the remaining windows
+    // fill the gap. CGSMoveWindowsToManagedSpace is the CGS call that has
+    // stayed effective across recent macOS versions, unlike Show/HideSpaces.
+    func sendFocusedWindowToSpace(_ index: Int) {
+        let conn = CGSMainConnectionID()
+        guard conn != 0 else {
+            Log.warn("space: send aborted, no CGS connection")
+            return
+        }
+        let spaces = userSpaces()
+        let arrayIndex = index - 1
+        guard arrayIndex >= 0, arrayIndex < spaces.count else {
+            Log.warn("space: send index \(index) out of bounds (have \(spaces.count) spaces)")
+            return
+        }
+        guard let window = WindowManager.shared.focusedManagedWindow() else {
+            Log.info("space: no focused managed window to send")
+            return
+        }
+        let target = spaces[arrayIndex]
+        // The API takes an NSArray of window IDs (NSNumber). One window at a
+        // time keeps the call simple and mirrors the spec.
+        CGSMoveWindowsToManagedSpace(conn,
+                                     [NSNumber(value: window.windowID)],
+                                     target)
+        Log.info("space: sent \(window.appName)#\(window.windowID) to index \(index) (id=\(target))")
+        // The window is now gone from this space — retile so the survivors
+        // reflow into equal splits.
+        WindowManager.shared.retile()
+    }
 }

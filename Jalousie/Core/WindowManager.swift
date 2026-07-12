@@ -199,6 +199,14 @@ final class WindowManager: NSObject {
     func focusLeft() { shiftFocus(by: -1) }
     func focusRight() { shiftFocus(by: +1) }
 
+    // Exposed so SpaceManager can move the focused window without
+    // duplicating the system-wide / frontmost-app focus resolution.
+    func focusedManagedWindow() -> ManagedWindow? {
+        let windows = enumerateManagedWindows()
+        guard let idx = focusedWindowIndex(in: windows) else { return nil }
+        return windows[idx]
+    }
+
     private func shiftFocus(by delta: Int) {
         let windows = enumerateManagedWindows()
         guard !windows.isEmpty else { return }

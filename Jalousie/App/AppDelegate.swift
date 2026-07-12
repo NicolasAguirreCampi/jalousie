@@ -117,6 +117,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             item.tag = spaceIndex
             menu.addItem(item)
         }
+        // Phase 17 verification helpers. Removed in Phase 20 cleanup.
+        for spaceIndex in 1...5 {
+            let item = NSMenuItem(
+                title: "Send window to space \(spaceIndex) (debug)",
+                action: #selector(sendToSpaceClicked(_:)),
+                keyEquivalent: ""
+            )
+            item.tag = spaceIndex
+            menu.addItem(item)
+        }
 
         menu.addItem(.separator())
 
@@ -174,6 +184,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         SpaceManager.shared.switchToSpace(at: index)
         let after = SpaceManager.shared.currentSpaceID().map(String.init) ?? "nil"
         Log.info("space: before=\(before) after=\(after)")
+    }
+
+    @objc private func sendToSpaceClicked(_ sender: NSMenuItem) {
+        let index = sender.tag
+        Log.info("menu: Send window to space \(index)")
+        SpaceManager.shared.sendFocusedWindowToSpace(index)
     }
 
     @objc private func listWindowsClicked() {
