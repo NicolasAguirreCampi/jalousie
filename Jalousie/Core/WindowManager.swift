@@ -10,13 +10,14 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMut
 // AXObserver callback — C-callable, so it's a free function, not a method.
 // The refcon carries an unowned pointer back to the WindowManager singleton
 // (safe because the singleton lives for the whole app lifetime).
-private let axObserverCallback: AXObserverCallback = { _, _, _, refcon in
+private let axObserverCallback: AXObserverCallback = { _, _, notification, refcon in
     guard let refcon else { return }
     let manager = Unmanaged<WindowManager>.fromOpaque(refcon).takeUnretainedValue()
+    let name = notification as String
     // Bounce onto the main queue — AX callbacks arrive on the main run loop
     // but nesting a retile inside the callback confuses AXObserver's own
     // internal state on some macOS versions.
-    DispatchQueue.main.async { manager.handleAXNotification() }
+    DispatchQueue.main.async { manager.handleAXNotification(named: name) }
 }
 
 final class WindowManager: NSObject {
@@ -364,15 +365,22 @@ final class WindowManager: NSObject {
     }
 
     private func collectRawManagedWindows() -> [ManagedWindow] {
-        let onScreenPIDs = collectOnScreenPIDs()
+        // Drive from the running-apps list rather than CGWindowList's PID
+        // column: Electron apps (VS Code, Slack, Discord) report their
+        // windows under a helper renderer PID that doesn't resolve back to
+        // a regular NSRunningApplication, so a PID-first enumeration drops
+        // them until the app is Cmd-Tabbed. Instead, iterate regular apps
+        // and use CGWindowList only to check which of their windows are
+        // currently on-screen (excludes minimized, other-space, hidden).
+        let onScreenIDs = collectOnScreenWindowIDs()
         let blacklist = Set(Config.shared.current.blacklist)
         var results: [ManagedWindow] = []
 
-        for pid in onScreenPIDs {
-            guard let app = NSRunningApplication(processIdentifier: pid),
-                  let bundleID = app.bundleIdentifier,
+        for app in NSWorkspace.shared.runningApplications
+            where app.activationPolicy == .regular {
+            guard let bundleID = app.bundleIdentifier,
                   !blacklist.contains(bundleID) else { continue }
-
+            let pid = app.processIdentifier
             let appElement = AXUIElementCreateApplication(pid)
             guard let axWindows: [AXUIElement] = copyAttribute(appElement, kAXWindowsAttribute) else { continue }
 
@@ -380,7 +388,8 @@ final class WindowManager: NSObject {
             for window in axWindows {
                 guard let managed = makeManagedWindow(from: window,
                                                       appName: appName,
-                                                      bundleID: bundleID) else { continue }
+                                                      bundleID: bundleID),
+                      onScreenIDs.contains(managed.windowID) else { continue }
                 results.append(managed)
             }
         }
@@ -405,10 +414,21 @@ final class WindowManager: NSObject {
 
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         let appElement = AXUIElementCreateApplication(pid)
-        // App-level: fire whenever the app makes a new window (Cmd-N,
-        // dialog panel, resident app re-opening after Cmd-W, etc.).
-        AXObserverAddNotification(obs, appElement,
-                                  kAXWindowCreatedNotification as CFString, refcon)
+        // App-level notifications. kAXWindowCreatedNotification handles the
+        // normal case (Cmd-N, dialog panel, resident app re-opening after
+        // Cmd-W). Chromium-based apps (VS Code, Slack, Discord) sometimes
+        // skip that event when a new window arrives via IPC — subscribing to
+        // focused/main window changes catches those, and to shown/hidden
+        // covers the window revealing without activating the app.
+        for name in [
+            kAXWindowCreatedNotification,
+            kAXFocusedWindowChangedNotification,
+            kAXMainWindowChangedNotification,
+            kAXApplicationShownNotification,
+            kAXApplicationHiddenNotification,
+        ] {
+            AXObserverAddNotification(obs, appElement, name as CFString, refcon)
+        }
 
         CFRunLoopAddSource(CFRunLoopGetCurrent(),
                            AXObserverGetRunLoopSource(obs),
@@ -444,25 +464,28 @@ final class WindowManager: NSObject {
 
     // Called from the C callback below. Marked internal so the free
     // function can see it.
-    fileprivate func handleAXNotification() {
+    fileprivate func handleAXNotification(named name: String) {
         guard Config.shared.current.settings.autoTile else { return }
         retile()
     }
 
     // MARK: - Private
 
-    private func collectOnScreenPIDs() -> Set<pid_t> {
+    // The set of CGWindowIDs currently visible on any display in this space,
+    // restricted to layer 0 (normal app windows). Used as a per-window filter
+    // rather than a per-PID one so Electron helper-owned windows still pass.
+    private func collectOnScreenWindowIDs() -> Set<CGWindowID> {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[CFString: Any]] else {
             return []
         }
-        var pids: Set<pid_t> = []
+        var ids: Set<CGWindowID> = []
         for entry in list {
             guard let layer = entry[kCGWindowLayer] as? Int, layer == 0,
-                  let pid = entry[kCGWindowOwnerPID] as? pid_t else { continue }
-            pids.insert(pid)
+                  let id = entry[kCGWindowNumber] as? CGWindowID else { continue }
+            ids.insert(id)
         }
-        return pids
+        return ids
     }
 
     private func makeManagedWindow(from element: AXUIElement,
