@@ -159,10 +159,10 @@ The spec's original polling-timer approach was replaced with event-driven `AXObs
 
 ## Phase 12 — Swap Left/Right
 
-- [ ] Add `swapLeft()` and `swapRight()` that swap the focused window with its neighbor in the ordered list, then retile
-- [ ] Clamp at edges
-- [ ] Add temporary menu items
-- [ ] **Verify:** swap moves the focused window to the neighbor's slot and vice versa; focus stays on the moved window; both windows snap instantly with no slide animation.
+- [x] Add `swapLeft()` and `swapRight()` that swap the focused window with its neighbor in the ordered list, then retile
+- [x] Clamp at edges
+- [x] Add temporary menu items
+- [x] **Verify:** swap moves the focused window to the neighbor's slot and vice versa; focus stays on the moved window; both windows snap instantly with no slide animation.
 
 ---
 

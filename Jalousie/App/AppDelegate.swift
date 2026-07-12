@@ -91,6 +91,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(focusRightClicked),
             keyEquivalent: ""
         ))
+        // Phase 12 verification helpers. Removed in Phase 20 cleanup.
+        menu.addItem(NSMenuItem(
+            title: "Swap left (debug)",
+            action: #selector(swapLeftClicked),
+            keyEquivalent: ""
+        ))
+        menu.addItem(NSMenuItem(
+            title: "Swap right (debug)",
+            action: #selector(swapRightClicked),
+            keyEquivalent: ""
+        ))
 
         menu.addItem(.separator())
 
@@ -129,6 +140,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func focusRightClicked() {
         Log.info("menu: Focus right")
         WindowManager.shared.focusRight()
+    }
+
+    @objc private func swapLeftClicked() {
+        Log.info("menu: Swap left")
+        WindowManager.shared.swapLeft()
+    }
+
+    @objc private func swapRightClicked() {
+        Log.info("menu: Swap right")
+        WindowManager.shared.swapRight()
     }
 
     @objc private func listWindowsClicked() {

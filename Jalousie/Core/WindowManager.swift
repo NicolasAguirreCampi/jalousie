@@ -115,7 +115,13 @@ final class WindowManager: NSObject {
     // MARK: - Tiling
 
     func retile() {
-        let windows = enumerateManagedWindows()
+        layout(enumerateManagedWindows())
+    }
+
+    // Apply the horizontal-split algorithm to an explicit ordered list. Swap
+    // calls this directly with a mutated order to avoid re-reading AX
+    // positions (which may lag the writes we just made).
+    private func layout(_ windows: [ManagedWindow]) {
         let settings = Config.shared.current.settings
 
         // Newly-seen windows need destroy/minimize observers so we react to
@@ -254,6 +260,34 @@ final class WindowManager: NSObject {
         }
         return id
     }
+
+    // MARK: - Swap
+
+    func swapLeft() { performSwap(delta: -1) }
+    func swapRight() { performSwap(delta: +1) }
+
+    private func performSwap(delta: Int) {
+        var windows = enumerateManagedWindows()
+        guard !windows.isEmpty else { return }
+        guard let currentIndex = focusedWindowIndex(in: windows) else {
+            Log.info("swap: no focused managed window")
+            return
+        }
+        let target = currentIndex + delta
+        guard target >= 0, target < windows.count, target != currentIndex else { return }
+
+        // Swap in-memory order, then lay out from that order. Reading back AX
+        // positions after a setFrame can lag inside a single runloop tick, so
+        // we deliberately drive layout from the mutated list rather than
+        // calling retile() which re-enumerates.
+        let moved = windows[currentIndex]
+        windows.swapAt(currentIndex, target)
+        layout(windows)
+        // Keep focus on the window the user moved.
+        raiseFocus(to: moved)
+    }
+
+    // MARK: - Focus (helpers)
 
     private func raiseFocus(to window: ManagedWindow) {
         // Two steps: activate the owning app so it takes keyboard focus, then
