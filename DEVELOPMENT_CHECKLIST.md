@@ -183,10 +183,10 @@ The spec's original polling-timer approach was replaced with event-driven `AXObs
 
 ## Phase 14 — Hotkey → WindowManager Wiring
 
-- [ ] In `HotkeyManager.dispatch(_:)` route `focusLeft/Right` and `swapLeft/Right` to `WindowManager.shared`
-- [ ] Route `retile` and `reloadConfig` similarly
-- [ ] Dispatch on `DispatchQueue.main.async` from the event tap callback
-- [ ] **Verify:** the four window shortcuts work end-to-end from keyboard, no menu clicks needed. `retile` hotkey also works.
+- [x] In `HotkeyManager.dispatch(_:)` route `focusLeft/Right` and `swapLeft/Right` to `WindowManager.shared`
+- [x] Route `retile` and `reloadConfig` similarly
+- [x] Dispatch on `DispatchQueue.main.async` from the event tap callback
+- [x] **Verify:** the four window shortcuts work end-to-end from keyboard, no menu clicks needed. `retile` hotkey also works.
 
 ---
 

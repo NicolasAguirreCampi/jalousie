@@ -295,7 +295,10 @@ final class WindowManager: NSObject {
         var pid: pid_t = 0
         if AXUIElementGetPid(window.axElement, &pid) == .success,
            let app = NSRunningApplication(processIdentifier: pid) {
-            app.activate(options: [])
+            // Polite `activate(options: [])` is a no-op when the caller isn't
+            // frontmost — and Jalousie (LSUIElement) never is. Ignoring other
+            // apps is required to actually steal focus from Xcode, Firefox, etc.
+            app.activate(options: [.activateIgnoringOtherApps])
         }
         AXUIElementSetAttributeValue(window.axElement,
                                      kAXMainAttribute as CFString,

@@ -97,11 +97,30 @@ final class HotkeyManager {
         let flags = event.flags.intersection(Self.trackedModifierMask)
 
         for binding in bindings where binding.keyCode == keyCode && binding.flags == flags {
-            // Log-only in Phase 13. Phase 14 will wire this into real dispatch.
-            DispatchQueue.main.async { Log.info("dispatch \(binding.action)") }
+            let action = binding.action
+            // Hop to main before touching AX / config — CGEventTap callbacks
+            // arrive on the event-tap thread and AX APIs are not thread-safe.
+            DispatchQueue.main.async { self.dispatch(action) }
             return nil
         }
         return Unmanaged.passUnretained(event)
+    }
+
+    // MARK: - Dispatch
+
+    private func dispatch(_ action: WMAction) {
+        Log.info("dispatch \(action)")
+        switch action {
+        case .focusLeft:  WindowManager.shared.focusLeft()
+        case .focusRight: WindowManager.shared.focusRight()
+        case .swapLeft:   WindowManager.shared.swapLeft()
+        case .swapRight:  WindowManager.shared.swapRight()
+        case .retile:     WindowManager.shared.retile()
+        case .reloadConfig: Config.shared.reload()
+        case .sendToSpace, .switchToSpace:
+            // Space actions land in Phase 18 once SpaceManager exists.
+            Log.info("dispatch: space actions not yet wired")
+        }
     }
 
     // Only compare on the modifiers we care about; strip caps-lock, function,
