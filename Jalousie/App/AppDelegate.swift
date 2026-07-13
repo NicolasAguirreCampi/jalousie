@@ -3,19 +3,26 @@ import Cocoa
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
+    // WindowManager/HotkeyManager start() attaches CGEventTaps and AX
+    // observers that only succeed when the process is trusted. Guard against
+    // double-start when the accessibility grant fires the notification.
+    private var managersStarted = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         Log.info("Jalousie starting")
         Config.shared.load()
         setupStatusItem()
-        checkAccessibilityPermission()
-        WindowManager.shared.start()
-        HotkeyManager.shared.start()
+        // macOS captures a process's TCC/accessibility decision at launch
+        // and does not re-evaluate it in-process, so if we're not trusted
+        // now we can't become trusted without spawning a fresh process.
+        // promptForAccessibilityIfNeeded handles that flow (grant + relaunch).
+        promptForAccessibilityIfNeeded()
+        startManagersIfTrusted()
     }
 
     // MARK: - Accessibility permission
 
-    private func checkAccessibilityPermission() {
+    private func promptForAccessibilityIfNeeded() {
         if AXIsProcessTrusted() {
             Log.info("accessibility: trusted")
             return
@@ -24,20 +31,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Log.warn("accessibility: not trusted — prompting user")
         NSApp.activate(ignoringOtherApps: true)
 
+        // Trigger the system prompt up-front so the user sees the OS's own
+        // "add Jalousie" dialog alongside our instructions.
+        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue()
+        _ = AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary)
+
         let alert = NSAlert()
         alert.messageText = "Jalousie needs Accessibility access"
         alert.informativeText = """
         Open System Settings → Privacy & Security → Accessibility and enable Jalousie.
 
-        Click Continue to open the system prompt.
+        macOS caches this permission at process launch, so once you toggle Jalousie on, click Relaunch below and everything will start working.
         """
-        alert.addButton(withTitle: "Continue")
+        alert.addButton(withTitle: "Relaunch Jalousie")
+        alert.addButton(withTitle: "Quit")
         alert.alertStyle = .informational
-        alert.runModal()
+        let response = alert.runModal()
 
-        let promptKey = kAXTrustedCheckOptionPrompt.takeUnretainedValue()
-        let options = [promptKey: true] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+        if response == .alertFirstButtonReturn {
+            relaunch()
+        } else {
+            NSApp.terminate(nil)
+        }
+    }
+
+    // Spawn a fresh copy of ourselves via `open`, then exit. The new
+    // process reads TCC fresh and sees the just-granted trust.
+    private func relaunch() {
+        guard let bundleURL = Bundle.main.bundleURL as URL? else {
+            Log.error("relaunch: no bundle URL — quitting")
+            NSApp.terminate(nil)
+            return
+        }
+        let process = Process()
+        process.launchPath = "/usr/bin/open"
+        process.arguments = ["-n", bundleURL.path]
+        do {
+            try process.run()
+        } catch {
+            Log.error("relaunch: failed to spawn new instance: \(error)")
+        }
+        NSApp.terminate(nil)
+    }
+
+    private func startManagersIfTrusted() {
+        guard !managersStarted, AXIsProcessTrusted() else { return }
+        managersStarted = true
+        WindowManager.shared.start()
+        HotkeyManager.shared.start()
     }
 
     func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool {

@@ -21,8 +21,22 @@ typedef NS_ENUM(int, CGSSpaceType) {
 extern CGSConnectionID CGSMainConnectionID(void);
 extern CGSSpaceID CGSGetActiveSpace(CGSConnectionID cid);
 extern NSArray *CGSCopySpaces(CGSConnectionID cid, int mask);
+extern CFArrayRef CGSCopySpacesForWindows(CGSConnectionID cid, int mask, CFArrayRef windowIDs);
 extern void CGSMoveWindowsToManagedSpace(CGSConnectionID cid, NSArray *windows, CGSSpaceID space);
+extern void CGSAddWindowsToSpaces(CGSConnectionID cid, NSArray *windows, NSArray *spaces);
+extern void CGSRemoveWindowsFromSpaces(CGSConnectionID cid, NSArray *windows, NSArray *spaces);
 extern void CGSHideSpaces(CGSConnectionID cid, NSArray *spaces);
 extern void CGSShowSpaces(CGSConnectionID cid, NSArray *spaces);
+
+// Returns the per-display space topology: an array of dictionaries, one per
+// display, each with keys "Display Identifier" (CFUUID string) and "Spaces"
+// (array of dicts each carrying an "id64" number). This is the only stable
+// way to answer "give me the Nth space on the display I care about."
+extern CFArrayRef CGSCopyManagedDisplaySpaces(CGSConnectionID cid);
+
+// SkyLight (SLS) private APIs — resolved via dlsym at runtime in Swift
+// (see SpaceManager) because the framework isn't in our public link path
+// and the symbol set varies by macOS version. Kept out of the extern block
+// so we don't hit link-time undefined errors.
 
 #endif /* CGSPrivate_h */

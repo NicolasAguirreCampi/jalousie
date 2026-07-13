@@ -24,11 +24,11 @@ final class WindowManager: NSObject {
     static let shared = WindowManager()
     private override init() { super.init() }
 
-    // Set of window IDs seen on a prior enumeration. Used to keep tile order
-    // stable across retiles: known windows keep their visual left-to-right
-    // order (sorted by current x), brand-new windows are appended at the
-    // right end regardless of where the app opened them.
-    private var knownWindowIDs: Set<CGWindowID> = []
+    // Ordered list of window IDs seen on prior enumerations. Once a window
+    // is assigned a slot, it keeps that slot until closed — dragging does
+    // not reorder tiles, it just snaps the window back on the next retile.
+    // Brand-new windows are appended to the right end.
+    private var orderedKnownWindowIDs: [CGWindowID] = []
 
     // One AXObserver per non-blacklisted running app process. The observer is
     // used both for app-level notifications (window created) and for every
@@ -38,6 +38,26 @@ final class WindowManager: NSObject {
     // Window IDs whose destroyed/minimized/deminimized notifications have
     // already been registered on the owning app's observer.
     private var observedWindowIDs: Set<CGWindowID> = []
+
+    // Set by kAXWindowMovedNotification, cleared once we retile on the
+    // following leftMouseUp. Lets us react to the end of a manual drag
+    // without retiling on every mouse-move during it, and without polling.
+    private var pendingRetileAfterDrag = false
+    private var mouseUpMonitor: Any?
+
+    // Undocumented AX attribute set on app elements (`true` for Firefox,
+    // Discord, Slack, VoiceOver, Zoom, etc.). When enabled, macOS animates
+    // every AXPosition/AXSize write and silently drops writes that arrive
+    // during an in-flight animation — that's the "Firefox rejects position"
+    // bug. yabai temporarily flips it off around every set-frame call and
+    // restores it after.
+    private static let kAXEnhancedUserInterface = "AXEnhancedUserInterface" as CFString
+
+    // Some apps (Xcode, Discord, Slack) refuse to resize below a per-app
+    // minimum. Once we observe a window ignoring our target width, we
+    // remember its floor and route allocation around it — otherwise
+    // subsequent retiles loop trying to shrink it and neighbors overlap.
+    private var minObservedWidths: [CGWindowID: CGFloat] = [:]
 
     // MARK: - Lifecycle
 
@@ -70,7 +90,28 @@ final class WindowManager: NSObject {
         for app in NSWorkspace.shared.runningApplications {
             registerAppObserver(for: app)
         }
+
+        // Global left-mouse-up monitor — the only trigger we get for the end
+        // of a manual window drag. addGlobalMonitor is event-driven (no
+        // polling); it doesn't fire on clicks inside Jalousie itself, which
+        // is fine — we have no clickable UI besides the menu bar item.
+        mouseUpMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseUp]) { [weak self] _ in
+            self?.handleMouseUp()
+        }
         Log.info("workspace + AX observers registered (\(appObservers.count) apps)")
+    }
+
+    private func handleMouseUp() {
+        guard pendingRetileAfterDrag else { return }
+        pendingRetileAfterDrag = false
+        guard Config.shared.current.settings.autoTile else { return }
+        // Yield to the next runloop tick so any trailing kAXWindowMoved
+        // notifications with the drag's final frame land before we sample
+        // AX positions. Without this we occasionally read stale frames and
+        // regroup the dragged window on its old screen.
+        DispatchQueue.main.async { [weak self] in
+            self?.retile()
+        }
     }
 
     // MARK: - Notification handlers
@@ -101,10 +142,6 @@ final class WindowManager: NSObject {
 
     @objc private func handleAppActivate(_ notification: Notification) {
         guard Config.shared.current.settings.autoTile else { return }
-        // Catches Cmd-Tab / dock-click into resident apps (WhatsApp, Slack,
-        // etc.) that reveal a previously hidden window without triggering a
-        // process-launch notification. The skip-if-already-tiled optimization
-        // makes this cheap when nothing actually needs to move.
         retile()
     }
 
@@ -116,7 +153,50 @@ final class WindowManager: NSObject {
     // MARK: - Tiling
 
     func retile() {
-        layout(enumerateManagedWindows())
+        let windows = enumerateManagedWindows()
+        // AX writes to apps with AXEnhancedUserInterface = true get animated
+        // by macOS and silently dropped when they overlap. Disable it on
+        // every owning app for the duration of the retile, then restore.
+        var pids = Set<pid_t>()
+        for w in windows {
+            var pid: pid_t = 0
+            if AXUIElementGetPid(w.axElement, &pid) == .success { pids.insert(pid) }
+        }
+        let restore = suspendEnhancedUserInterface(for: pids)
+        defer { restore() }
+        layout(windows)
+    }
+
+    // Turn AXEnhancedUserInterface off on every app that has it on right
+    // now, remembering which apps we touched. The returned closure restores
+    // the attribute on exactly those apps — apps that already had it off
+    // are left untouched. This is the cornerstone yabai trick that makes
+    // AXPosition writes stick on Firefox/Discord/Slack.
+    private func suspendEnhancedUserInterface(for pids: Set<pid_t>) -> () -> Void {
+        var toRestore: [pid_t] = []
+        for pid in pids {
+            let appElement = AXUIElementCreateApplication(pid)
+            var value: CFTypeRef?
+            let err = AXUIElementCopyAttributeValue(appElement,
+                                                   Self.kAXEnhancedUserInterface,
+                                                   &value)
+            guard err == .success, let cf = value,
+                  CFGetTypeID(cf) == CFBooleanGetTypeID(),
+                  // Safe: guarded by CFGetTypeID(cf) == CFBooleanGetTypeID() above.
+                  CFBooleanGetValue((cf as! CFBoolean)) else { continue }
+            AXUIElementSetAttributeValue(appElement,
+                                         Self.kAXEnhancedUserInterface,
+                                         kCFBooleanFalse)
+            toRestore.append(pid)
+        }
+        return {
+            for pid in toRestore {
+                let appElement = AXUIElementCreateApplication(pid)
+                AXUIElementSetAttributeValue(appElement,
+                                             Self.kAXEnhancedUserInterface,
+                                             kCFBooleanTrue)
+            }
+        }
     }
 
     // Apply the horizontal-split algorithm to an explicit ordered list. Swap
@@ -134,34 +214,177 @@ final class WindowManager: NSObject {
             Log.info("retile: no managed windows")
             return
         }
-        if settings.ignoreSingleWindow && windows.count == 1 {
-            Log.info("retile: single window ignored per config")
-            return
-        }
-        guard let screen = NSScreen.main, let primary = NSScreen.screens.first else {
-            Log.warn("retile: no screen available")
+        // The Quartz-Y flip needs the screen at Cocoa origin (0,0) — that's
+        // the coordinate-origin screen (the one with the menu bar), and it
+        // isn't necessarily NSScreen.screens.first when the user has
+        // reassigned displays.
+        guard let primary = primaryScreen() else {
+            Log.warn("retile: no primary screen available")
             return
         }
 
+        // Group windows by the screen their frame currently overlaps most.
+        // Dragging a window to another monitor moves it into that screen's
+        // group on the next retile — we do not force it back to a "main"
+        // display like the single-screen version did.
+        var groups: [ObjectIdentifier: (screen: NSScreen, windows: [ManagedWindow])] = [:]
+        for window in windows {
+            guard let screen = screen(for: window, in: NSScreen.screens, primary: primary) else { continue }
+            let key = ObjectIdentifier(screen)
+            groups[key, default: (screen, [])].windows.append(window)
+        }
+
+        var totalMoved = 0
+        var totalLaid = 0
+        for (_, group) in groups {
+            let (laid, moved) = layoutOnScreen(group.windows,
+                                               screen: group.screen,
+                                               primary: primary,
+                                               settings: settings)
+            totalLaid += laid
+            totalMoved += moved
+        }
+        Log.info("retile: laid out \(totalLaid) windows across \(groups.count) screen(s), moved=\(totalMoved), gap=\(settings.windowGap)")
+    }
+
+    private func layoutOnScreen(_ windows: [ManagedWindow],
+                                screen: NSScreen,
+                                primary: NSScreen,
+                                settings: JalousieConfig.Settings) -> (laid: Int, moved: Int) {
+        if settings.ignoreSingleWindow && windows.count == 1 { return (0, 0) }
         let usable = quartzUsableFrame(for: screen, primary: primary)
         let count = windows.count
         let gap = settings.windowGap
-        let totalGap = gap * CGFloat(count - 1)
-        let tileWidth = (usable.width - totalGap) / CGFloat(count)
+        var widths = allocateWidths(count: count, usable: usable.width,
+                                    gap: gap, windows: windows)
 
+        var moved = applyRow(windows: windows, widths: widths,
+                             origin: usable.origin, height: usable.height, gap: gap)
+        if learnStubbornWidths(windows: windows, widths: widths) {
+            widths = allocateWidths(count: count, usable: usable.width,
+                                    gap: gap, windows: windows)
+            moved += applyRow(windows: windows, widths: widths,
+                              origin: usable.origin, height: usable.height, gap: gap)
+        }
+        return (count, moved)
+    }
+
+    // Divide usable width across windows. Windows we've observed to have a
+    // floor (Xcode, Discord, …) get their floor; the rest share the leftover
+    // equally. Iterates because fixing one window may leave a share smaller
+    // than another window's known floor.
+    private func allocateWidths(count: Int, usable: CGFloat, gap: CGFloat,
+                                windows: [ManagedWindow]) -> [CGFloat] {
+        let totalGap = gap * CGFloat(max(count - 1, 0))
+        var fixed = Array(repeating: false, count: count)
+        var widths = Array(repeating: CGFloat(0), count: count)
+
+        while true {
+            let fixedSum = zip(widths, fixed).reduce(CGFloat(0)) { acc, pair in
+                acc + (pair.1 ? pair.0 : 0)
+            }
+            let flexibleIndexes = (0..<count).filter { !fixed[$0] }
+            if flexibleIndexes.isEmpty { break }
+            let share = max(0, (usable - totalGap - fixedSum) / CGFloat(flexibleIndexes.count))
+
+            var promoted = false
+            for i in flexibleIndexes {
+                let floor = minObservedWidths[windows[i].windowID] ?? 0
+                if floor > share + 1 {
+                    widths[i] = floor
+                    fixed[i] = true
+                    promoted = true
+                } else {
+                    widths[i] = share
+                }
+            }
+            if !promoted { break }
+        }
+        return widths
+    }
+
+    private func applyRow(windows: [ManagedWindow], widths: [CGFloat],
+                          origin: CGPoint, height: CGFloat, gap: CGFloat) -> Int {
         var moved = 0
+        var x = origin.x
         for (i, window) in windows.enumerated() {
-            let x = usable.origin.x + (tileWidth + gap) * CGFloat(i)
-            let targetFrame = CGRect(x: x, y: usable.origin.y,
-                                     width: tileWidth, height: usable.height)
-            // Skip windows already at their target frame. AX positions can
-            // drift by fractional points from what we set, so we tolerate
-            // a 1pt gap in either dimension.
+            let targetFrame = CGRect(x: x, y: origin.y,
+                                     width: widths[i], height: height)
+            x += widths[i] + gap
             if framesApproximatelyEqual(window.frame, targetFrame) { continue }
             setFrame(of: window.axElement, to: targetFrame)
             moved += 1
         }
-        Log.info("retile: laid out \(count) windows, moved=\(moved), gap=\(gap)")
+        return moved
+    }
+
+    // Returns true if we discovered new floor information (i.e. any window
+    // stayed wider than what we asked for). Caller uses that as the signal
+    // to re-allocate and re-apply.
+    private func learnStubbornWidths(windows: [ManagedWindow],
+                                     widths: [CGFloat]) -> Bool {
+        var learned = false
+        for (i, window) in windows.enumerated() {
+            guard let actual = readSize(window.axElement) else { continue }
+            if actual.width > widths[i] + 1 {
+                let known = minObservedWidths[window.windowID] ?? 0
+                if actual.width > known {
+                    minObservedWidths[window.windowID] = actual.width
+                    learned = true
+                }
+            }
+        }
+        return learned
+    }
+
+    private func readSize(_ element: AXUIElement) -> CGSize? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value) == .success,
+              let cf = value, CFGetTypeID(cf) == AXValueGetTypeID() else { return nil }
+        var size = CGSize.zero
+        // Safe: guarded by CFGetTypeID(cf) == AXValueGetTypeID() above.
+        AXValueGetValue(cf as! AXValue, .cgSize, &size)
+        return size
+    }
+
+    // The primary display in Cocoa terms is the one whose frame.origin is
+    // (0, 0) — that's the coordinate origin used for Quartz-Y conversion.
+    // NSScreen.main tracks the active screen, NSScreen.screens.first isn't
+    // guaranteed to be the origin display, so search explicitly.
+    private func primaryScreen() -> NSScreen? {
+        for screen in NSScreen.screens where screen.frame.origin == .zero {
+            return screen
+        }
+        return NSScreen.screens.first
+    }
+
+    // Pick the screen a window "belongs to" by choosing the one its frame
+    // overlaps most. Window frames are in Quartz coords (y grows down from
+    // the primary display's top-left); NSScreen.frame is Cocoa (y grows up
+    // from the primary display's bottom-left), so convert first.
+    private func screen(for window: ManagedWindow,
+                        in screens: [NSScreen],
+                        primary: NSScreen) -> NSScreen? {
+        let cocoaY = primary.frame.height - window.frame.origin.y - window.frame.size.height
+        let cocoaFrame = CGRect(x: window.frame.origin.x, y: cocoaY,
+                                width: window.frame.size.width, height: window.frame.size.height)
+        var best: (NSScreen, CGFloat)?
+        for screen in screens {
+            let intersection = screen.frame.intersection(cocoaFrame)
+            guard !intersection.isNull else { continue }
+            let area = intersection.width * intersection.height
+            if area > (best?.1 ?? 0) { best = (screen, area) }
+        }
+        // Fall back to the screen the center point sits on — covers the
+        // pathological case where a window's frame is fully offscreen
+        // (e.g. mid-drag) so no intersection is positive.
+        if best == nil {
+            let center = CGPoint(x: cocoaFrame.midX, y: cocoaFrame.midY)
+            for screen in screens where screen.frame.contains(center) {
+                return screen
+            }
+        }
+        return best?.0
     }
 
     private func framesApproximatelyEqual(_ a: CGRect, _ b: CGRect,
@@ -181,8 +404,10 @@ final class WindowManager: NSObject {
                       width: cocoa.size.width, height: cocoa.size.height)
     }
 
-    // Position + size in a single synchronous block — no NSAnimationContext,
-    // no CATransaction, no delays. Snap-instant window moves per the spec.
+    // Position + size in a single synchronous block — no animations, no
+    // delays. yabai's size-position-size sandwich: an intervening AXPosition
+    // write can otherwise clamp size to the target app's visible-area
+    // constraint, so we set size, then position, then size again.
     private func setFrame(of element: AXUIElement, to frame: CGRect) {
         var origin = frame.origin
         var size = frame.size
@@ -191,6 +416,7 @@ final class WindowManager: NSObject {
             Log.warn("setFrame: could not build AX values")
             return
         }
+        AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
         AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, positionValue)
         AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
     }
@@ -293,6 +519,10 @@ final class WindowManager: NSObject {
         // calling retile() which re-enumerates.
         let moved = windows[currentIndex]
         windows.swapAt(currentIndex, target)
+        // Persist the new order so the next retile keeps it. Enumeration now
+        // reads strictly from the cached order, so without this the swap
+        // would be undone as soon as any other event fires a retile.
+        orderedKnownWindowIDs = windows.map { $0.windowID }
         layout(windows)
         // Keep focus on the window the user moved.
         raiseFocus(to: moved)
@@ -331,37 +561,21 @@ final class WindowManager: NSObject {
 
     func enumerateManagedWindows() -> [ManagedWindow] {
         let raw = collectRawManagedWindows()
+        let rawByID = Dictionary(uniqueKeysWithValues: raw.map { ($0.windowID, $0) })
 
-        // Known windows: keep their visual order (sorted by current x). This
-        // lets the user drag a window between tiles and have subsequent
-        // retiles honor the new position.
-        let known = raw.filter { knownWindowIDs.contains($0.windowID) }
-            .sorted { $0.frame.origin.x < $1.frame.origin.x }
+        // Preserve the cached slot order for every window still present.
+        // A dragged window keeps its slot; only newly-created windows shift
+        // the layout, and they land at the right end.
+        var ordered = orderedKnownWindowIDs.compactMap { rawByID[$0] }
+        let knownIDs = Set(ordered.map { $0.windowID })
+        let brandNew = raw.filter { !knownIDs.contains($0.windowID) }
+        // Sort new windows by x so their initial layout mirrors whatever
+        // order their apps opened them in.
+        ordered += brandNew.sorted { $0.frame.origin.x < $1.frame.origin.x }
 
-        let brandNew = raw.filter { !knownWindowIDs.contains($0.windowID) }
-
-        let ordered: [ManagedWindow]
-        if known.isEmpty {
-            // Fresh set (e.g. first enumeration, or a space switch left the
-            // cache empty relative to the new space). Sort by current x so
-            // the existing visual layout is preserved instead of being
-            // shuffled into whatever PID order the enumeration returned.
-            ordered = brandNew.sorted { $0.frame.origin.x < $1.frame.origin.x }
-        } else {
-            // Some tiles carry over. Preserve their order and append any new
-            // window at the right end, per spec — a freshly-spawned window
-            // should not displace known tiles.
-            ordered = known + brandNew
-        }
-
-        var withIndex = ordered
-        for i in withIndex.indices { withIndex[i].orderIndex = i }
-
-        // Cache the union of what we just saw. Closed windows drop off
-        // automatically; windows from other spaces stay cached so returning
-        // to that space preserves the same-space order across visits.
-        knownWindowIDs.formUnion(withIndex.map { $0.windowID })
-        return withIndex
+        for i in ordered.indices { ordered[i].orderIndex = i }
+        orderedKnownWindowIDs = ordered.map { $0.windowID }
+        return ordered
     }
 
     private func collectRawManagedWindows() -> [ManagedWindow] {
@@ -458,6 +672,10 @@ final class WindowManager: NSObject {
                                       kAXWindowMiniaturizedNotification as CFString, refcon)
             AXObserverAddNotification(observer, window.axElement,
                                       kAXWindowDeminiaturizedNotification as CFString, refcon)
+            // Manual drags fire this continuously; we defer the retile to
+            // the following leftMouseUp so we don't tile mid-drag.
+            AXObserverAddNotification(observer, window.axElement,
+                                      kAXWindowMovedNotification as CFString, refcon)
             observedWindowIDs.insert(window.windowID)
         }
     }
@@ -465,6 +683,10 @@ final class WindowManager: NSObject {
     // Called from the C callback below. Marked internal so the free
     // function can see it.
     fileprivate func handleAXNotification(named name: String) {
+        if name == (kAXWindowMovedNotification as String) {
+            pendingRetileAfterDrag = true
+            return
+        }
         guard Config.shared.current.settings.autoTile else { return }
         retile()
     }
