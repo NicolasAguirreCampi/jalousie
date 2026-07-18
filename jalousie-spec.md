@@ -85,51 +85,75 @@ NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
 
 **Responsibilities:**
 - Enumerate all visible, manageable windows on the current space
-- Apply the tiling layout algorithm
+- Apply the tiling layout algorithm (per-screen for multi-monitor setups)
 - Handle window open/close events and auto-retile
 - Implement swap-left, swap-right
 - Implement focus-left, focus-right
-- Expose `sendWindow(_:toSpace:)` used by SpaceManager
+- Implement zoom-fullscreen toggle (window fills its display; tile slot preserved for focus/swap ordering)
+- Expose `focusedManagedWindow()` used by SpaceManager for send-to-space
 
 **Window enumeration:**
 ```swift
-// Get all on-screen windows via CGWindowListCopyWindowInfo
-// Filter: kCGWindowLayer == 0 (normal windows only)
-// Filter: kCGWindowIsOnscreen == true
-// Filter: not in Config.blacklist (by bundleID)
-// Filter: has AXUIElement with AXRole == "AXWindow"
-// Filter: window is not minimized (AXMinimized == false)
-// Filter: window is not fullscreen (AXFullScreen == false) — manage these separately
+// Iterate NSWorkspace.runningApplications where activationPolicy == .regular
+// (CGWindowList's PID column drops Electron windows owned by helper renderers)
+// For each app: read kAXWindowsAttribute, then filter each window:
+//   - AXRole == "AXWindow"
+//   - AXSubrole == "AXStandardWindow" (rejects dialogs, floating panels,
+//     iTerm's Cmd+F find bar, etc.)
+//   - AXMinimized == false
+//   - AXFullScreen (private attr) == false
+//   - CGWindowID present in CGWindowList's on-screen set (per-window on-screen check)
+//   - bundleID not in Config.blacklist
 ```
 
-**Tiling algorithm:**
+**Tiling algorithm (per-screen, adaptive):**
 ```
-screenFrame = NSScreen.main.visibleFrame  // excludes menu bar and Dock
-windowCount = managedWindows.count
-if windowCount == 0: return
-tileWidth = screenFrame.width / windowCount
-for i, window in managedWindows:
-    frame = CGRect(
-        x: screenFrame.origin.x + (tileWidth * i),
-        y: screenFrame.origin.y,
-        width: tileWidth,
-        height: screenFrame.height
-    )
-    setFrame(window.axElement, frame)
+1. Group managed windows by the screen their frame overlaps most.
+2. For each screen group:
+   a. Compute equal tile widths across usable (screen.visibleFrame → Quartz).
+   b. Promote any window with a learned "stubborn floor" (see below) to its
+      floor; equal-share the remainder among flexible windows. Iterate until
+      no more promotions.
+   c. For each window: setFrame to (x, y, allocated width, usable height).
+      If the window is in zoomedWindowIDs, target the full usable frame
+      instead. Its tile x-cursor still advances so unzoom is a plain retile.
+   d. Read back sizes. If any non-zoomed window's actual > allocated + 1pt,
+      record it as that window's minimum and re-apply the row.
 ```
+
+**Zoom-fullscreen:**
+Windows in the `zoomedWindowIDs` set are overridden to fill their display's
+full usable frame at layout time. The tile slot is still tracked, so focus-
+left/right traverses the ordered list normally and revealing a neighbor
+brings it to the front over the zoomed windows. Multiple windows can be
+zoomed simultaneously — the raised one is visible on top.
+
+**Adaptive widths:**
+Some apps (Xcode, Discord, Slack, etc.) refuse to shrink below a per-app
+minimum. `learnStubbornWidths` observes actual widths post-setFrame and
+records the floor keyed by CGWindowID. Zoomed windows are skipped from
+this learning so the intentionally-forced full-usable width isn't
+recorded as their minimum.
 
 **Performance requirement — no animation:**
-Set window position and size via direct AXUIElement calls only. Never wrap these calls in `NSAnimationContext.runAnimationGroup` or any animation block. macOS may apply its own implicit window-move animation — disable it by setting the position and size attributes in a single synchronous block without yielding to the run loop between calls.
+Set window position and size via direct AXUIElement calls only. Never wrap
+these calls in `NSAnimationContext.runAnimationGroup`, `CATransaction`, or
+any animation block. Additionally, temporarily disable
+`AXEnhancedUserInterface` on each affected app for the duration of each
+retile — apps with it enabled (Firefox, Discord, Slack, VoiceOver, Zoom)
+animate every position write and silently drop overlapping writes, which
+otherwise causes drops and visible flicker.
 
 **Setting window frame via AXUIElement:**
 ```swift
 func setFrame(_ element: AXUIElementRef, _ frame: CGRect) {
     var position = frame.origin
     var size = frame.size
-    AXUIElementSetAttributeValue(element, kAXPositionAttribute,
-        AXValueCreate(.cgPoint, &position)!)
-    AXUIElementSetAttributeValue(element, kAXSizeAttribute,
-        AXValueCreate(.cgSize, &size)!)
+    // Size → position → size sandwich: an intervening AXPosition write can
+    // otherwise clamp size to the target app's visible-area constraint.
+    AXUIElementSetAttributeValue(element, kAXSizeAttribute,     AXValueCreate(.cgSize, &size)!)
+    AXUIElementSetAttributeValue(element, kAXPositionAttribute, AXValueCreate(.cgPoint, &position)!)
+    AXUIElementSetAttributeValue(element, kAXSizeAttribute,     AXValueCreate(.cgSize, &size)!)
 }
 ```
 
@@ -142,11 +166,19 @@ func setFrame(_ element: AXUIElementRef, _ frame: CGRect) {
 
 **Mid-session window changes — event-driven, no polling:**
 Register a per-process `AXObserver` for every non-blacklisted running app and subscribe to:
-- `kAXWindowCreatedNotification` on the app element — fires on Cmd-N, dialog panels, resident apps re-opening a window after Cmd-W
-- `kAXUIElementDestroyedNotification` on each managed window — fires on Cmd-W
-- `kAXWindowMiniaturizedNotification` / `kAXWindowDeminiaturizedNotification` on each managed window
 
-All observer callbacks funnel into `retile()`. **No timers, no polling anywhere in the app** — window lifecycle is entirely event-driven.
+App-level (some Chromium/Electron apps skip kAXWindowCreated; the extras cover them):
+- `kAXWindowCreatedNotification`
+- `kAXFocusedWindowChangedNotification`
+- `kAXMainWindowChangedNotification`
+- `kAXApplicationShownNotification` / `kAXApplicationHiddenNotification`
+
+Per managed-window:
+- `kAXUIElementDestroyedNotification` — Cmd-W
+- `kAXWindowMiniaturizedNotification` / `kAXWindowDeminiaturizedNotification`
+- `kAXWindowMovedNotification` — sets a `pendingRetileAfterDrag` flag; the actual retile is flushed by a global `.leftMouseUp` `NSEvent` monitor so we don't fight the user's cursor during a drag
+
+All non-move callbacks funnel into `retile()`. **No timers, no polling anywhere in the app** — window lifecycle is entirely event-driven.
 
 **Swap algorithm:**
 ```
@@ -166,7 +198,7 @@ focusRight: AXUIElementSetAttributeValue(managedWindows[index+1], kAXFocusedAttr
 ```
 
 **Window ordering:**
-Maintain order by `x` origin of each window's current frame. When a new window is added, append to the right end of the list before retiling.
+A persistent cache (`orderedKnownWindowIDs`) records each window's slot. Dragging does **not** reorder — the window snaps back to its assigned slot on the next retile. Only `swapLeft/Right` mutates the order. Brand-new windows are appended to the right end (sorted by their initial x among themselves) and closed windows drop out automatically.
 
 ---
 
@@ -177,48 +209,50 @@ Maintain order by `x` origin of each window's current frame. When a new window i
 - Switch to a target space by index
 - Move the focused window to a target space, then retile both the source and destination spaces
 
-**Private CGS headers required** (`CGSPrivate.h`):
+**Private CGS/SLS headers required** (`CGSPrivate.h`):
 ```c
 typedef int CGSConnectionID;
 typedef uint64_t CGSSpaceID;
-typedef enum {
-    kCGSSpaceUser  = 0,
-    kCGSSpaceFullscreen = 1,
-} CGSSpaceType;
 
 extern CGSConnectionID CGSMainConnectionID(void);
 extern CGSSpaceID CGSGetActiveSpace(CGSConnectionID cid);
 extern NSArray *CGSCopySpaces(CGSConnectionID cid, int mask);
+extern CFArrayRef CGSCopyManagedDisplaySpaces(CGSConnectionID cid);
 extern void CGSMoveWindowsToManagedSpace(CGSConnectionID cid, NSArray *windows, CGSSpaceID space);
 extern void CGSHideSpaces(CGSConnectionID cid, NSArray *spaces);
 extern void CGSShowSpaces(CGSConnectionID cid, NSArray *spaces);
+// SLSSpaceSetCompatID / SLSSetWindowListWorkspace / SLSSpaceAddWindowsAndRemoveFromSpaces
+// are resolved via dlsym at runtime — not declared here because the SkyLight
+// framework isn't in the public link path.
 ```
 
-**Bridging header:** Add `CGSPrivate.h` to the Objective-C bridging header so Swift can call these directly.
+**Bridging header:** Add `CGSPrivate.h` and `SpaceBridge.h` (see below) to the Objective-C bridging header so Swift can call these directly.
+
+**Display-aware space list:**
+Space IDs are per-display. `spacesForCurrentDisplay(of:)` calls
+`CGSCopyManagedDisplaySpaces`, resolves the focused window's display via
+`CGGetDisplaysWithPoint` → `CGDisplayCreateUUIDFromDisplayID`, and returns
+only the space list for that display. `Option+Shift+2` therefore always
+means "second space on the monitor the focused window is on".
+
+**Send window to space (macOS 26+ / Tahoe):**
+The exported wrapper `SLSSpaceAddWindowsAndRemoveFromSpaces` is gated behind
+`SLSWindowManagementClientOperationsEnabled` and returns `-1342177280`
+(unentitled) for non-Apple processes. The working path is yabai's v7.1.25
+trick: walk the SkyLight image's LC_SYMTAB with a small Mach-O parser to
+find the private symbol
+`__ZL54SLSPerformAsynchronousBridgedWindowManagementOperationP47SLSAsynchronousBridgedWindowManagementOperation`,
+allocate a `SLSBridgedMoveWindowsToManagedSpaceOperation` via `objc_msgSend`
+(selector `initWithSpaceID:windows:options:` on macOS 26+, or
+`initWithWindows:spaceID:` on older), and call the perform function
+directly — bypassing the entitlement gate. Implemented in
+`Jalousie/Core/SpaceBridge.m`.
 
 **Switch space:**
-```swift
-func switchToSpace(_ index: Int) {
-    // Use CGSCopySpaces to get list of user spaces
-    // Get spaceID at index
-    // Use CGSShowSpaces + CGSHideSpaces to switch
-    // Fallback: CoreGraphics private SkyLight framework direct call
-}
-```
-
-**Send window to space:**
-```swift
-func sendFocusedWindowToSpace(_ targetIndex: Int) {
-    let conn = CGSMainConnectionID()
-    let window = WindowManager.shared.getFocusedWindow()
-    guard let windowID = window?.windowID else { return }
-    let spaces = CGSCopySpaces(conn, 0x7) as! [CGSSpaceID]
-    guard targetIndex < spaces.count else { return }
-    CGSMoveWindowsToManagedSpace(conn, [windowID] as NSArray, spaces[targetIndex])
-    WindowManager.shared.retile()          // retile source space
-    // switch to target space and retile there too (optional, per user preference)
-}
-```
+Still uses `CGSShowSpaces` + `CGSHideSpaces`. This API is heavily clamped on
+Tahoe (visibly no-ops in most configurations) — kept as-is because there is
+no known SIP-enabled bypass. Not a blocker for send-to-space, which uses
+the bridged operation above.
 
 ---
 
@@ -286,14 +320,16 @@ L = 37
     "send-to-space-2":   { "key": "2", "modifiers": ["option", "shift"] },
     "send-to-space-3":   { "key": "3", "modifiers": ["option", "shift"] },
     "send-to-space-4":   { "key": "4", "modifiers": ["option", "shift"] },
-    "send-to-space-5":   { "key": "5", "modifiers": ["option", "shift"] }
+    "send-to-space-5":   { "key": "5", "modifiers": ["option", "shift"] },
+    "retile":            { "key": "e", "modifiers": ["option", "shift"] },
+    "toggle-zoom-fullscreen": { "key": "m", "modifiers": ["option", "shift"] }
   },
   "blacklist": [
     "com.apple.finder",
     "com.apple.systempreferences",
     "com.apple.ActivityMonitor",
     "com.apple.Terminal",
-    "com.googlecode.iterm2"
+    "com.apple.calculator"
   ],
   "settings": {
     "autoTile": true,
@@ -408,10 +444,13 @@ open /Applications/Jalousie.app
 | Auto-tile on window open | ✅ |
 | Auto-retile on window close | ✅ |
 | Equal horizontal splits, 100% height | ✅ |
+| Adaptive widths for apps with hard-coded minimums | ✅ |
 | Focus left/right | ✅ |
 | Swap left/right | ✅ |
+| Zoom-fullscreen toggle (multi-window, tile-slot preserved) | ✅ |
 | Send window to space N | ✅ |
-| Switch to space N (without moving window) | ✅ |
+| Switch to space N (without moving window) | ⚠️ dispatches, but the CGS show/hide APIs are clamped on macOS 26 |
+| Multi-monitor support (per-screen tiling, drag between screens) | ✅ |
 | Window gap setting | ✅ (config only) |
 | App blacklist | ✅ |
 | Menu bar icon | ✅ |
@@ -419,18 +458,20 @@ open /Applications/Jalousie.app
 | Config hot-reload | ✅ |
 | Custom layouts (BSP, main+stack) | ❌ v2 |
 | Per-app rules | ❌ v2 |
-| Multi-monitor support | ❌ v2 |
 | Preferences window | ❌ v2 |
 | Floating window toggle | ❌ v2 |
+| Persisted stubborn-width cache across launches | ❌ v2 |
 
 ---
 
 ## Known macOS Tahoe (26.x) Constraints
 
-- **Plain binaries cannot get Accessibility permissions.** Jalousie must be a proper `.app` bundle — this spec is designed for that from the start.
-- **CGSPrivate functions are stable** across macOS 12–26 but are private API. Apple may change or remove them without notice. `CGSMoveWindowsToManagedSpace` is the most likely to break.
+- **Plain binaries cannot get Accessibility permissions.** Jalousie must be a proper `.app` bundle. Trust is cached at process launch and cannot be re-evaluated in-process, so the first-launch flow shows an alert with a "Relaunch Jalousie" button that spawns a fresh instance via `open -n` after the user grants access.
 - **AXUIElement is the stable public path** for all window geometry operations. Prefer it over any private API wherever possible.
-- **No scripting addition.** Do not attempt to replicate yabai's `--load-sa` injection approach. AXUIElement covers all v1 needs.
+- **Apps may drop AX writes silently** when `AXEnhancedUserInterface` is enabled on the target app (Firefox, Discord, Slack, VoiceOver, Zoom). The window manager temporarily disables and restores that attribute across each retile — this is the same mitigation yabai uses.
+- **`CGSMoveWindowsToManagedSpace` is silently no-op'd** on macOS 26. Send-to-space uses the private `SLSBridgedMoveWindowsToManagedSpaceOperation` class + a Mach-O local-symbol resolver to reach the underlying perform function (yabai's v7.1.25 fix). Works with SIP enabled.
+- **`CGSShowSpaces` / `CGSHideSpaces` (switch-to-space)** dispatches but doesn't visibly move on Tahoe. No known SIP-enabled bypass; kept in place so hotkeys wire up cleanly.
+- **No scripting addition.** Do not attempt to replicate yabai's `--load-sa` injection approach. The Mach-O symbol trick above avoids the need.
 
 ---
 
