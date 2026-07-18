@@ -14,7 +14,8 @@
     "com.apple.finder",
     "com.apple.systempreferences",
     "com.apple.ActivityMonitor",
-    "com.apple.Terminal"
+    "com.apple.Terminal",
+    "com.apple.calculator"
   ],
   "settings": {
     "autoTile": true,

@@ -37,6 +37,7 @@ extension JalousieConfig {
             "com.apple.systempreferences",
             "com.apple.ActivityMonitor",
             "com.apple.Terminal",
+            "com.apple.calculator",
         ],
         settings: Settings(
             autoTile: true,
