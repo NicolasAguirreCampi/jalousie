@@ -8,7 +8,8 @@
     "send-to-space-2":   { "key": "2", "modifiers": ["option", "shift"] },
     "send-to-space-3":   { "key": "3", "modifiers": ["option", "shift"] },
     "send-to-space-4":   { "key": "4", "modifiers": ["option", "shift"] },
-    "send-to-space-5":   { "key": "5", "modifiers": ["option", "shift"] }
+    "send-to-space-5":   { "key": "5", "modifiers": ["option", "shift"] },
+    "retile":            { "key": "e", "modifiers": ["option", "shift"] }
   },
   "blacklist": [
     "com.apple.finder",
