@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22">
+  <!--
+    Menu-bar template image. Drawn as pure black on transparent so macOS
+    can tint it with the active menu-bar appearance (light/dark).
+
+    Three vertical slats echo the app icon's tiled-window motif. The
+    opacity gradient (100/70/40) mirrors the app icon's dark/mid/light
+    slat coloring — carried through with alpha because template images
+    can only be one color.
+  -->
+  <rect x="3"    y="4" width="4" height="14" rx="0.8" fill="#000" fill-opacity="1.00"/>
+  <rect x="9"    y="4" width="4" height="14" rx="0.8" fill="#000" fill-opacity="0.70"/>
+  <rect x="15"   y="4" width="4" height="14" rx="0.8" fill="#000" fill-opacity="0.40"/>
+</svg>

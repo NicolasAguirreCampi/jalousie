@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <style>
+      .frame { fill: #1a1a18; }
+      .slat-dark { fill: #1a1a18; }
+      .slat-mid  { fill: #7a7870; }
+      .slat-light{ fill: #c8c6bc; }
+    </style>
+  </defs>
+
+  <!-- Outer screen frame -->
+  <rect class="frame" x="0" y="0" width="1024" height="1024" rx="224"/>
+
+  <!-- Inner screen background -->
+  <rect fill="#f0ede4" x="80" y="80" width="864" height="864" rx="144"/>
+
+  <!-- Three vertical window columns -->
+  <rect class="slat-dark"  x="152" y="152" width="212" height="720" rx="32"/>
+  <rect class="slat-mid"   x="406" y="152" width="212" height="720" rx="32"/>
+  <rect class="slat-light" x="660" y="152" width="212" height="720" rx="32"/>
+</svg>
