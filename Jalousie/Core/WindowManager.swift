@@ -153,10 +153,15 @@ final class WindowManager: NSObject {
     // MARK: - Tiling
 
     func retile() {
-        let windows = enumerateManagedWindows()
-        // AX writes to apps with AXEnhancedUserInterface = true get animated
-        // by macOS and silently dropped when they overlap. Disable it on
-        // every owning app for the duration of the retile, then restore.
+        layoutSuspendingEnhancedUI(enumerateManagedWindows())
+    }
+
+    // Wraps a layout call with the AXEnhancedUserInterface disable/restore
+    // dance so AX writes to apps like Firefox/Discord aren't dropped or
+    // animated. Both retile() and performSwap() route through this — swap
+    // used to call layout() directly, which is why Firefox visibly animated
+    // on Option+Shift+J/L.
+    private func layoutSuspendingEnhancedUI(_ windows: [ManagedWindow]) {
         var pids = Set<pid_t>()
         for w in windows {
             var pid: pid_t = 0
@@ -523,7 +528,7 @@ final class WindowManager: NSObject {
         // reads strictly from the cached order, so without this the swap
         // would be undone as soon as any other event fires a retile.
         orderedKnownWindowIDs = windows.map { $0.windowID }
-        layout(windows)
+        layoutSuspendingEnhancedUI(windows)
         // Keep focus on the window the user moved.
         raiseFocus(to: moved)
     }
