@@ -716,6 +716,12 @@ final class WindowManager: NSObject {
         guard let role: String = copyAttribute(element, kAXRoleAttribute), role == kAXWindowRole else {
             return nil
         }
+        // Only tile top-level user windows. Dialogs, floating panels, and
+        // in-window auxiliaries like iTerm's Cmd+F find bar all present as
+        // AXWindow but with a non-standard subrole — tiling them causes the
+        // layout to churn every time the user opens/dismisses one.
+        let subrole: String? = copyAttribute(element, kAXSubroleAttribute)
+        if let subrole, subrole != kAXStandardWindowSubrole { return nil }
         let isMinimized: Bool = copyAttribute(element, kAXMinimizedAttribute) ?? false
         if isMinimized { return nil }
         // "AXFullScreen" is not exposed as a Swift constant. Absent attribute → treat as false.
