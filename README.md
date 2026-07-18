@@ -59,7 +59,7 @@ Apple gated several private WindowServer APIs on Tahoe behind an entitlement no 
 ## Icons
 
 - `assets/jalousie-icon.svg` — application icon, 1024×1024. Convert to `.icns` via Xcode's asset catalog when producing a release build.
-- `assets/jalousie-menubar.svg` — menu-bar template glyph, 22×22. Currently the menu bar uses the `rectangle.split.3x1` SF Symbol as a placeholder; wiring the custom template requires generating 1x/2x PNGs and adding a `MenuBar.imageset` (with template-rendering intent) to `Assets.xcassets`.
+- `assets/jalousie-menubar.svg` — menu-bar template glyph, 22×22. Wired via `Jalousie/Assets.xcassets/MenuBarIcon.imageset` with template-rendering intent + vector preservation; loaded in `AppDelegate.setupStatusItem` with a fallback to the `rectangle.split.3x1` SF Symbol.
 
 ## Spec
 

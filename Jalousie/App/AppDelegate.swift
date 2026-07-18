@@ -89,10 +89,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        item.button?.image = NSImage(
-            systemSymbolName: "rectangle.split.3x1",
-            accessibilityDescription: "Jalousie"
-        )
+        // Prefer the bundled template SVG. Falls back to the SF Symbol if
+        // the asset can't be loaded, so a broken/missing MenuBarIcon.imageset
+        // never leaves the menu bar empty.
+        let icon = NSImage(named: "MenuBarIcon")
+            ?? NSImage(systemSymbolName: "rectangle.split.3x1",
+                       accessibilityDescription: "Jalousie")
+        icon?.isTemplate = true
+        item.button?.image = icon
         item.menu = buildMenu()
         statusItem = item
     }
