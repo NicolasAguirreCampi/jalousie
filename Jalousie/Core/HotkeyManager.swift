@@ -117,6 +117,7 @@ final class HotkeyManager {
         case .swapRight:  WindowManager.shared.swapRight()
         case .retile:     WindowManager.shared.retile()
         case .reloadConfig: Config.shared.reload()
+        case .toggleZoomFullscreen: WindowManager.shared.toggleZoomFullscreen()
         case .sendToSpace(let index):   SpaceManager.shared.sendFocusedWindowToSpace(index)
         case .switchToSpace(let index): SpaceManager.shared.switchToSpace(at: index)
         }

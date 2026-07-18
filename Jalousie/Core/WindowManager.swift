@@ -59,6 +59,14 @@ final class WindowManager: NSObject {
     // subsequent retiles loop trying to shrink it and neighbors overlap.
     private var minObservedWidths: [CGWindowID: CGFloat] = [:]
 
+    // Windows currently in fullscreen-zoom mode. Any number can be zoomed
+    // simultaneously — each is independently toggled. Zoomed windows
+    // occupy the full usable frame of their screen; their tile position
+    // is still remembered so un-zooming instantly reveals correct
+    // neighbors, and non-zoomed windows keep their normal tile layout
+    // (they end up behind whichever zoomed window is currently raised).
+    private var zoomedWindowIDs: Set<CGWindowID> = []
+
     // MARK: - Lifecycle
 
     func start() {
@@ -264,12 +272,14 @@ final class WindowManager: NSObject {
                                     gap: gap, windows: windows)
 
         var moved = applyRow(windows: windows, widths: widths,
-                             origin: usable.origin, height: usable.height, gap: gap)
-        if learnStubbornWidths(windows: windows, widths: widths) {
+                             origin: usable.origin, height: usable.height,
+                             gap: gap, zoomedIDs: zoomedWindowIDs, zoomFrame: usable)
+        if learnStubbornWidths(windows: windows, widths: widths, skip: zoomedWindowIDs) {
             widths = allocateWidths(count: count, usable: usable.width,
                                     gap: gap, windows: windows)
             moved += applyRow(windows: windows, widths: widths,
-                              origin: usable.origin, height: usable.height, gap: gap)
+                              origin: usable.origin, height: usable.height,
+                              gap: gap, zoomedIDs: zoomedWindowIDs, zoomFrame: usable)
         }
         return (count, moved)
     }
@@ -309,12 +319,21 @@ final class WindowManager: NSObject {
     }
 
     private func applyRow(windows: [ManagedWindow], widths: [CGFloat],
-                          origin: CGPoint, height: CGFloat, gap: CGFloat) -> Int {
+                          origin: CGPoint, height: CGFloat, gap: CGFloat,
+                          zoomedIDs: Set<CGWindowID>, zoomFrame: CGRect) -> Int {
         var moved = 0
         var x = origin.x
         for (i, window) in windows.enumerated() {
-            let targetFrame = CGRect(x: x, y: origin.y,
+            // Zoomed windows take the full zoomFrame instead of their tile.
+            // Their tile position (x cursor) still advances so unzoom is a
+            // no-op re-layout without needing to recompute.
+            let targetFrame: CGRect
+            if zoomedIDs.contains(window.windowID) {
+                targetFrame = zoomFrame
+            } else {
+                targetFrame = CGRect(x: x, y: origin.y,
                                      width: widths[i], height: height)
+            }
             x += widths[i] + gap
             if framesApproximatelyEqual(window.frame, targetFrame) { continue }
             setFrame(of: window.axElement, to: targetFrame)
@@ -327,9 +346,14 @@ final class WindowManager: NSObject {
     // stayed wider than what we asked for). Caller uses that as the signal
     // to re-allocate and re-apply.
     private func learnStubbornWidths(windows: [ManagedWindow],
-                                     widths: [CGFloat]) -> Bool {
+                                     widths: [CGFloat],
+                                     skip: Set<CGWindowID>) -> Bool {
         var learned = false
         for (i, window) in windows.enumerated() {
+            // Zoomed windows were intentionally set to full-usable width;
+            // reading them back would falsely record that as their minimum,
+            // then allocateWidths would forever give them the whole screen.
+            if skip.contains(window.windowID) { continue }
             guard let actual = readSize(window.axElement) else { continue }
             if actual.width > widths[i] + 1 {
                 let known = minObservedWidths[window.windowID] ?? 0
@@ -533,6 +557,30 @@ final class WindowManager: NSObject {
         raiseFocus(to: moved)
     }
 
+    // MARK: - Zoom
+
+    // Toggle the focused window's fullscreen-zoom on its own display.
+    // Matches yabai's `--toggle zoom-fullscreen`: layout order is preserved,
+    // only one window per display can be zoomed at a time, and focus-left/
+    // right still traverses the ordered list so opt+L from a zoomed window
+    // reveals the neighbor behind it.
+    func toggleZoomFullscreen() {
+        let windows = enumerateManagedWindows()
+        guard let index = focusedWindowIndex(in: windows) else {
+            Log.info("zoom: no focused managed window")
+            return
+        }
+        let window = windows[index]
+        if zoomedWindowIDs.contains(window.windowID) {
+            zoomedWindowIDs.remove(window.windowID)
+            Log.info("zoom: off \(window.appName)#\(window.windowID)")
+        } else {
+            zoomedWindowIDs.insert(window.windowID)
+            Log.info("zoom: on \(window.appName)#\(window.windowID)")
+        }
+        retile()
+    }
+
     // MARK: - Focus (helpers)
 
     private func raiseFocus(to window: ManagedWindow) {
@@ -580,6 +628,10 @@ final class WindowManager: NSObject {
 
         for i in ordered.indices { ordered[i].orderIndex = i }
         orderedKnownWindowIDs = ordered.map { $0.windowID }
+        // Drop zoom entries for windows that no longer exist so the set
+        // doesn't grow unbounded across the process lifetime.
+        let alive = Set(orderedKnownWindowIDs)
+        zoomedWindowIDs.formIntersection(alive)
         return ordered
     }
 

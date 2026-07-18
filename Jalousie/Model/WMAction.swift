@@ -13,6 +13,7 @@ enum WMAction: Equatable {
     case switchToSpace(Int)
     case retile
     case reloadConfig
+    case toggleZoomFullscreen
 
     init?(configKey: String) {
         switch configKey {
@@ -22,6 +23,7 @@ enum WMAction: Equatable {
         case "swap-right":   self = .swapRight
         case "retile":       self = .retile
         case "reload-config": self = .reloadConfig
+        case "toggle-zoom-fullscreen": self = .toggleZoomFullscreen
         default:
             if let n = Self.trailingIndex(configKey, prefix: "send-to-space-") {
                 self = .sendToSpace(n)

@@ -32,6 +32,7 @@ extension JalousieConfig {
             "send-to-space-4": HotKeyConfig(key: "4", modifiers: ["option", "shift"]),
             "send-to-space-5": HotKeyConfig(key: "5", modifiers: ["option", "shift"]),
             "retile":          HotKeyConfig(key: "e", modifiers: ["option", "shift"]),
+            "toggle-zoom-fullscreen": HotKeyConfig(key: "m", modifiers: ["option", "shift"]),
         ],
         blacklist: [
             "com.apple.finder",
