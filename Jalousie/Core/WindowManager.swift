@@ -682,8 +682,7 @@ final class WindowManager: NSObject {
         // per-window on-screen filter (Electron apps report their windows
         // under helper-renderer PIDs that don't resolve to a regular
         // NSRunningApplication, so a PID-first enumeration would drop them).
-        let onScreenIDs = collectOnScreenWindowIDs()
-        let onScreenPIDs = collectOnScreenPIDs()
+        let (onScreenIDs, onScreenPIDs) = collectOnScreenWindows()
         let blacklist = Set(Config.shared.current.blacklist)
         var results: [ManagedWindow] = []
 
@@ -721,21 +720,25 @@ final class WindowManager: NSObject {
         return results
     }
 
-    // Owner PIDs of every layer-0 on-screen window. Used as the primary
-    // signal for "which apps should we ask for windows?" before falling
-    // back to appsWithWindows.
-    private func collectOnScreenPIDs() -> Set<pid_t> {
+    // Single CGWindowList sweep returning both signals a retile needs:
+    // (a) the set of on-screen CGWindowIDs — per-window filter that keeps
+    //     Electron helper windows in the mix, and
+    // (b) the set of owner PIDs — the fast-path hint for "which regular
+    //     apps should we bother asking for kAXWindowsAttribute?"
+    // Merging previous two calls into one WindowServer IPC per retile.
+    private func collectOnScreenWindows() -> (ids: Set<CGWindowID>, pids: Set<pid_t>) {
         let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[CFString: Any]] else {
-            return []
+            return ([], [])
         }
+        var ids: Set<CGWindowID> = []
         var pids: Set<pid_t> = []
         for entry in list {
-            guard let layer = entry[kCGWindowLayer] as? Int, layer == 0,
-                  let pid = entry[kCGWindowOwnerPID] as? pid_t else { continue }
-            pids.insert(pid)
+            guard let layer = entry[kCGWindowLayer] as? Int, layer == 0 else { continue }
+            if let id = entry[kCGWindowNumber] as? CGWindowID { ids.insert(id) }
+            if let pid = entry[kCGWindowOwnerPID] as? pid_t { pids.insert(pid) }
         }
-        return pids
+        return (ids, pids)
     }
 
     // MARK: - AX Observers
@@ -821,23 +824,6 @@ final class WindowManager: NSObject {
     }
 
     // MARK: - Private
-
-    // The set of CGWindowIDs currently visible on any display in this space,
-    // restricted to layer 0 (normal app windows). Used as a per-window filter
-    // rather than a per-PID one so Electron helper-owned windows still pass.
-    private func collectOnScreenWindowIDs() -> Set<CGWindowID> {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
-        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[CFString: Any]] else {
-            return []
-        }
-        var ids: Set<CGWindowID> = []
-        for entry in list {
-            guard let layer = entry[kCGWindowLayer] as? Int, layer == 0,
-                  let id = entry[kCGWindowNumber] as? CGWindowID else { continue }
-            ids.insert(id)
-        }
-        return ids
-    }
 
     // The 6 window attributes we read on every enumerate. Kept in this
     // exact order because indexes below assume it.
