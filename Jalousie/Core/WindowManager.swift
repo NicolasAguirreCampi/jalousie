@@ -67,6 +67,15 @@ final class WindowManager: NSObject {
     // (they end up behind whichever zoomed window is currently raised).
     private var zoomedWindowIDs: Set<CGWindowID> = []
 
+    // Collapses bursts of AX / workspace notifications into a single retile
+    // on the next runloop tick. Direct callers (menu bar "Retile" click,
+    // hotkey, swap) still call retile() synchronously — coalescing only
+    // applies to system-driven event storms.
+    private lazy var coalescer = RetileCoalescer(
+        schedule: { DispatchQueue.main.async(execute: $0) },
+        execute: { [weak self] in self?.retile() }
+    )
+
     // MARK: - Lifecycle
 
     func start() {
@@ -131,7 +140,7 @@ final class WindowManager: NSObject {
             // will fire once the app actually has a window — no timer needed.
             registerAppObserver(for: app)
         }
-        retile()
+        requestRetile()
     }
 
     @objc private func handleAppTerminate(_ notification: Notification) {
@@ -139,28 +148,46 @@ final class WindowManager: NSObject {
         if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication {
             unregisterAppObserver(pid: app.processIdentifier)
         }
-        retile()
+        requestRetile()
     }
 
     @objc private func handleSpaceChange(_ notification: Notification) {
         let settings = Config.shared.current.settings
         guard settings.autoTile, settings.tileOnSpaceSwitch else { return }
-        retile()
+        requestRetile()
     }
 
     @objc private func handleAppActivate(_ notification: Notification) {
         guard Config.shared.current.settings.autoTile else { return }
-        retile()
+        requestRetile()
     }
 
     @objc private func handleAppUnhide(_ notification: Notification) {
         guard Config.shared.current.settings.autoTile else { return }
-        retile()
+        requestRetile()
     }
 
     // MARK: - Tiling
 
+    // Coalesced retile — the entry point every AX / workspace notification
+    // should use. Bursts of N requests in one runloop tick fan into a single
+    // retile() call, cutting redundant work on Cmd-Tab and window-creation
+    // storms. Direct callers (menu bar, hotkey) should still call retile().
+    func requestRetile() {
+        PerfCounters.retileRequested += 1
+        coalescer.request()
+    }
+
     func retile() {
+        let start = DispatchTime.now().uptimeNanoseconds
+        PerfCounters.retileExecuted += 1
+        defer {
+            let elapsed = DispatchTime.now().uptimeNanoseconds - start
+            PerfCounters.retileTotalNanos &+= elapsed
+            if elapsed > PerfCounters.retileMaxNanos {
+                PerfCounters.retileMaxNanos = elapsed
+            }
+        }
         layoutSuspendingEnhancedUI(enumerateManagedWindows())
     }
 
@@ -190,6 +217,7 @@ final class WindowManager: NSObject {
         for pid in pids {
             let appElement = AXUIElementCreateApplication(pid)
             var value: CFTypeRef?
+            PerfCounters.axReads += 1
             let err = AXUIElementCopyAttributeValue(appElement,
                                                    Self.kAXEnhancedUserInterface,
                                                    &value)
@@ -197,6 +225,7 @@ final class WindowManager: NSObject {
                   CFGetTypeID(cf) == CFBooleanGetTypeID(),
                   // Safe: guarded by CFGetTypeID(cf) == CFBooleanGetTypeID() above.
                   CFBooleanGetValue((cf as! CFBoolean)) else { continue }
+            PerfCounters.axWrites += 1
             AXUIElementSetAttributeValue(appElement,
                                          Self.kAXEnhancedUserInterface,
                                          kCFBooleanFalse)
@@ -205,6 +234,7 @@ final class WindowManager: NSObject {
         return {
             for pid in toRestore {
                 let appElement = AXUIElementCreateApplication(pid)
+                PerfCounters.axWrites += 1
                 AXUIElementSetAttributeValue(appElement,
                                              Self.kAXEnhancedUserInterface,
                                              kCFBooleanTrue)
@@ -368,6 +398,7 @@ final class WindowManager: NSObject {
 
     private func readSize(_ element: AXUIElement) -> CGSize? {
         var value: CFTypeRef?
+        PerfCounters.axReads += 1
         guard AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &value) == .success,
               let cf = value, CFGetTypeID(cf) == AXValueGetTypeID() else { return nil }
         var size = CGSize.zero
@@ -445,6 +476,8 @@ final class WindowManager: NSObject {
             Log.warn("setFrame: could not build AX values")
             return
         }
+        PerfCounters.setFrameCalls += 1
+        PerfCounters.axWrites &+= 3
         AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
         AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, positionValue)
         AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, sizeValue)
@@ -496,6 +529,7 @@ final class WindowManager: NSObject {
     private func systemWideFocusedWindowID() -> CGWindowID? {
         let systemElement = AXUIElementCreateSystemWide()
         var value: CFTypeRef?
+        PerfCounters.axReads += 1
         guard AXUIElementCopyAttributeValue(systemElement,
                                             kAXFocusedWindowAttribute as CFString,
                                             &value) == .success,
@@ -514,6 +548,7 @@ final class WindowManager: NSObject {
         let pid = app.processIdentifier
         let appElement = AXUIElementCreateApplication(pid)
         var value: CFTypeRef?
+        PerfCounters.axReads += 1
         guard AXUIElementCopyAttributeValue(appElement,
                                             kAXFocusedWindowAttribute as CFString,
                                             &value) == .success,
@@ -613,6 +648,7 @@ final class WindowManager: NSObject {
     // MARK: - Enumeration
 
     func enumerateManagedWindows() -> [ManagedWindow] {
+        PerfCounters.enumerateCalls += 1
         let raw = collectRawManagedWindows()
         let rawByID = Dictionary(uniqueKeysWithValues: raw.map { ($0.windowID, $0) })
 
@@ -745,7 +781,7 @@ final class WindowManager: NSObject {
             return
         }
         guard Config.shared.current.settings.autoTile else { return }
-        retile()
+        requestRetile()
     }
 
     // MARK: - Private
@@ -807,6 +843,7 @@ final class WindowManager: NSObject {
 
     private func copyAttribute<T>(_ element: AXUIElement, _ attribute: String) -> T? {
         var value: CFTypeRef?
+        PerfCounters.axReads += 1
         let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
         guard result == .success else { return nil }
         return value as? T
@@ -814,6 +851,7 @@ final class WindowManager: NSObject {
 
     private func copyAXPoint(_ element: AXUIElement, _ attribute: String) -> CGPoint? {
         var value: CFTypeRef?
+        PerfCounters.axReads += 1
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let cf = value, CFGetTypeID(cf) == AXValueGetTypeID() else { return nil }
         var point = CGPoint.zero
@@ -824,6 +862,7 @@ final class WindowManager: NSObject {
 
     private func copyAXSize(_ element: AXUIElement, _ attribute: String) -> CGSize? {
         var value: CFTypeRef?
+        PerfCounters.axReads += 1
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
               let cf = value, CFGetTypeID(cf) == AXValueGetTypeID() else { return nil }
         var size = CGSize.zero

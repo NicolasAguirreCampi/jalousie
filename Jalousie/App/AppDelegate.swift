@@ -123,6 +123,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        // Perf counter helpers — used during the refactor phase to compare
+        // hot-path metrics before and after a change. Cheap to keep in the
+        // menu since the counter bumps themselves are essentially free.
+        menu.addItem(NSMenuItem(
+            title: "Reset perf counters",
+            action: #selector(resetPerfCountersClicked),
+            keyEquivalent: ""
+        ))
+        menu.addItem(NSMenuItem(
+            title: "Log perf counters",
+            action: #selector(logPerfCountersClicked),
+            keyEquivalent: ""
+        ))
+
+        menu.addItem(.separator())
+
         menu.addItem(NSMenuItem(
             title: "Quit",
             action: #selector(quitClicked),
@@ -148,5 +164,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func quitClicked() {
         Log.info("menu: Quit")
         NSApp.terminate(nil)
+    }
+
+    @objc private func resetPerfCountersClicked() {
+        PerfCounters.reset()
+        Log.info("perf: counters reset")
+    }
+
+    @objc private func logPerfCountersClicked() {
+        Log.info(PerfCounters.snapshot())
     }
 }
