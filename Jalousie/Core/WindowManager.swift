@@ -839,31 +839,53 @@ final class WindowManager: NSObject {
         return ids
     }
 
+    // The 6 window attributes we read on every enumerate. Kept in this
+    // exact order because indexes below assume it.
+    private static let windowAttributeNames: [String] = [
+        kAXRoleAttribute as String,
+        kAXSubroleAttribute as String,
+        kAXMinimizedAttribute as String,
+        "AXFullScreen",              // no Swift constant
+        kAXPositionAttribute as String,
+        kAXSizeAttribute as String,
+    ]
+    private static let windowAttributeNamesCFArray: CFArray =
+        windowAttributeNames.map { $0 as CFString } as CFArray
+
     private func makeManagedWindow(from element: AXUIElement,
                                    appName: String,
                                    bundleID: String) -> ManagedWindow? {
-        guard let role: String = copyAttribute(element, kAXRoleAttribute), role == kAXWindowRole else {
-            return nil
-        }
+        // Single batched IPC for all 6 attributes instead of one round-trip
+        // per attribute. AXUIElementCopyMultipleAttributeValues returns
+        // parallel values; missing attributes come back as AXValueRef
+        // wrapping an .axError so we can distinguish from real values.
+        var out: CFArray?
+        PerfCounters.axReads += 1
+        let err = AXUIElementCopyMultipleAttributeValues(
+            element,
+            Self.windowAttributeNamesCFArray,
+            AXCopyMultipleAttributeOptions(rawValue: 0),
+            &out
+        )
+        guard err == .success, let values = out as? [AnyObject],
+              values.count == Self.windowAttributeNames.count else { return nil }
+
         // Only tile top-level user windows. Dialogs, floating panels, and
         // in-window auxiliaries like iTerm's Cmd+F find bar all present as
-        // AXWindow but with a non-standard subrole — tiling them causes the
-        // layout to churn every time the user opens/dismisses one.
-        let subrole: String? = copyAttribute(element, kAXSubroleAttribute)
-        if let subrole, subrole != kAXStandardWindowSubrole { return nil }
-        let isMinimized: Bool = copyAttribute(element, kAXMinimizedAttribute) ?? false
-        if isMinimized { return nil }
-        // "AXFullScreen" is not exposed as a Swift constant. Absent attribute → treat as false.
-        let isFullscreen: Bool = copyAttribute(element, "AXFullScreen") ?? false
-        if isFullscreen { return nil }
+        // AXWindow but with a non-standard subrole — tiling them churns
+        // the layout every time the user opens/dismisses one.
+        guard let role = attrString(values[0]), role == kAXWindowRole else { return nil }
+        if let subrole = attrString(values[1]), subrole != kAXStandardWindowSubrole { return nil }
+        if attrBool(values[2]) == true { return nil }  // minimized
+        if attrBool(values[3]) == true { return nil }  // AXFullScreen
 
         var windowID: CGWindowID = 0
         guard _AXUIElementGetWindow(element, &windowID) == .success, windowID != 0 else {
             return nil
         }
 
-        let origin = copyAXPoint(element, kAXPositionAttribute) ?? .zero
-        let size = copyAXSize(element, kAXSizeAttribute) ?? .zero
+        let origin = attrPoint(values[4]) ?? .zero
+        let size   = attrSize(values[5])  ?? .zero
 
         return ManagedWindow(
             windowID: windowID,
@@ -873,6 +895,37 @@ final class WindowManager: NSObject {
             frame: CGRect(origin: origin, size: size),
             orderIndex: 0
         )
+    }
+
+    // Batched-read result unpackers. Values that came back as an error
+    // (AXValueRef with type .axError) are treated as absent.
+    private func isErrorValue(_ v: AnyObject) -> Bool {
+        let cf = v as CFTypeRef
+        guard CFGetTypeID(cf) == AXValueGetTypeID() else { return false }
+        // Safe: guarded by CFGetTypeID(cf) == AXValueGetTypeID() above.
+        return AXValueGetType(cf as! AXValue) == .axError
+    }
+    private func attrString(_ v: AnyObject) -> String? {
+        isErrorValue(v) ? nil : (v as? String)
+    }
+    private func attrBool(_ v: AnyObject) -> Bool? {
+        isErrorValue(v) ? nil : (v as? Bool)
+    }
+    private func attrPoint(_ v: AnyObject) -> CGPoint? {
+        guard !isErrorValue(v),
+              CFGetTypeID(v as CFTypeRef) == AXValueGetTypeID() else { return nil }
+        var point = CGPoint.zero
+        // Safe: guarded by CFGetTypeID above.
+        AXValueGetValue(v as! AXValue, .cgPoint, &point)
+        return point
+    }
+    private func attrSize(_ v: AnyObject) -> CGSize? {
+        guard !isErrorValue(v),
+              CFGetTypeID(v as CFTypeRef) == AXValueGetTypeID() else { return nil }
+        var size = CGSize.zero
+        // Safe: guarded by CFGetTypeID above.
+        AXValueGetValue(v as! AXValue, .cgSize, &size)
+        return size
     }
 
     // MARK: - AX attribute helpers
