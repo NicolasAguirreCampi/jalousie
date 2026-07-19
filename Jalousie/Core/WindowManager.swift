@@ -666,34 +666,44 @@ final class WindowManager: NSObject {
 
     func enumerateManagedWindows() -> [ManagedWindow] {
         PerfCounters.enumerateCalls += 1
-        let raw = collectRawManagedWindows()
+        let (onScreenIDs, onScreenPIDs, allWindowIDs) = collectOnScreenWindows()
+
+        // Prune the caches against the WindowServer-wide liveness set,
+        // NOT against just-visible windows. A window on another space
+        // isn't in onScreenIDs but IS in allWindowIDs — dropping it
+        // would lose its slot position and zoom state, and the user
+        // would see the layout reshuffle on every space switch.
+        orderedKnownWindowIDs.removeAll { !allWindowIDs.contains($0) }
+        zoomedWindowIDs.formIntersection(allWindowIDs)
+
+        let raw = collectRawManagedWindows(onScreenIDs: onScreenIDs,
+                                            onScreenPIDs: onScreenPIDs)
         let rawByID = Dictionary(uniqueKeysWithValues: raw.map { ($0.windowID, $0) })
 
-        // Preserve the cached slot order for every window still present.
-        // A dragged window keeps its slot; only newly-created windows shift
-        // the layout, and they land at the right end.
+        // Ordered visible windows in cached slot order. Windows from
+        // other spaces are simply absent from `raw` (nothing to lay out
+        // right now) but stay in the cache for when their space returns.
         var ordered = orderedKnownWindowIDs.compactMap { rawByID[$0] }
-        let knownIDs = Set(ordered.map { $0.windowID })
+
+        // Brand-new windows we've never seen at all — append them to the
+        // right end so they don't displace known slots. Sorted by x so
+        // multiple simultaneous opens land in a stable visual order.
+        let knownIDs = Set(orderedKnownWindowIDs)
         let brandNew = raw.filter { !knownIDs.contains($0.windowID) }
-        // Sort new windows by x so their initial layout mirrors whatever
-        // order their apps opened them in.
-        ordered += brandNew.sorted { $0.frame.origin.x < $1.frame.origin.x }
+        let brandNewSorted = brandNew.sorted { $0.frame.origin.x < $1.frame.origin.x }
+        ordered += brandNewSorted
+        orderedKnownWindowIDs.append(contentsOf: brandNewSorted.map { $0.windowID })
 
         for i in ordered.indices { ordered[i].orderIndex = i }
-        orderedKnownWindowIDs = ordered.map { $0.windowID }
-        // Drop zoom entries for windows that no longer exist so the set
-        // doesn't grow unbounded across the process lifetime.
-        let alive = Set(orderedKnownWindowIDs)
-        zoomedWindowIDs.formIntersection(alive)
         return ordered
     }
 
-    private func collectRawManagedWindows() -> [ManagedWindow] {
+    private func collectRawManagedWindows(onScreenIDs: Set<CGWindowID>,
+                                          onScreenPIDs: Set<pid_t>) -> [ManagedWindow] {
         // Iterate regular running apps and use CGWindowList only as a
         // per-window on-screen filter (Electron apps report their windows
         // under helper-renderer PIDs that don't resolve to a regular
         // NSRunningApplication, so a PID-first enumeration would drop them).
-        let (onScreenIDs, onScreenPIDs) = collectOnScreenWindows()
         let blacklist = Set(Config.shared.current.blacklist)
         var results: [ManagedWindow] = []
 
@@ -731,25 +741,41 @@ final class WindowManager: NSObject {
         return results
     }
 
-    // Single CGWindowList sweep returning both signals a retile needs:
-    // (a) the set of on-screen CGWindowIDs — per-window filter that keeps
-    //     Electron helper windows in the mix, and
-    // (b) the set of owner PIDs — the fast-path hint for "which regular
-    //     apps should we bother asking for kAXWindowsAttribute?"
-    // Merging previous two calls into one WindowServer IPC per retile.
-    private func collectOnScreenWindows() -> (ids: Set<CGWindowID>, pids: Set<pid_t>) {
-        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+    // Single CGWindowList sweep returning the three signals a retile needs:
+    // (a) on-screen CGWindowIDs (this space only) — per-window filter that
+    //     keeps Electron helper windows in the mix,
+    // (b) on-screen owner PIDs — fast-path hint for "which regular apps
+    //     should we bother asking for kAXWindowsAttribute?",
+    // (c) ALL window IDs known to WindowServer — includes windows on other
+    //     spaces. This is the liveness check for cache pruning: a windowID
+    //     that's absent here is truly closed, one that's present but not
+    //     in (a) is just on another space and must stay cached.
+    private func collectOnScreenWindows() -> (onScreenIDs: Set<CGWindowID>,
+                                               onScreenPIDs: Set<pid_t>,
+                                               allWindowIDs: Set<CGWindowID>) {
+        // Drop .optionOnScreenOnly so we get every WindowServer-tracked
+        // window, then split by kCGWindowIsOnscreen. Same IPC cost, more
+        // information.
+        let options: CGWindowListOption = [.excludeDesktopElements]
         guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[CFString: Any]] else {
-            return ([], [])
+            return ([], [], [])
         }
-        var ids: Set<CGWindowID> = []
-        var pids: Set<pid_t> = []
+        var onScreenIDs: Set<CGWindowID> = []
+        var onScreenPIDs: Set<pid_t> = []
+        var allIDs: Set<CGWindowID> = []
         for entry in list {
-            guard let layer = entry[kCGWindowLayer] as? Int, layer == 0 else { continue }
-            if let id = entry[kCGWindowNumber] as? CGWindowID { ids.insert(id) }
-            if let pid = entry[kCGWindowOwnerPID] as? pid_t { pids.insert(pid) }
+            guard let layer = entry[kCGWindowLayer] as? Int, layer == 0,
+                  let id = entry[kCGWindowNumber] as? CGWindowID else { continue }
+            allIDs.insert(id)
+            let onScreen = (entry[kCGWindowIsOnscreen] as? Bool) ?? false
+            if onScreen {
+                onScreenIDs.insert(id)
+                if let pid = entry[kCGWindowOwnerPID] as? pid_t {
+                    onScreenPIDs.insert(pid)
+                }
+            }
         }
-        return (ids, pids)
+        return (onScreenIDs, onScreenPIDs, allIDs)
     }
 
     // MARK: - AX Observers
