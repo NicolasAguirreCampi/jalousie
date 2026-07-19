@@ -10,14 +10,18 @@ private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMut
 // AXObserver callback — C-callable, so it's a free function, not a method.
 // The refcon carries an unowned pointer back to the WindowManager singleton
 // (safe because the singleton lives for the whole app lifetime).
-private let axObserverCallback: AXObserverCallback = { _, _, notification, refcon in
+private let axObserverCallback: AXObserverCallback = { _, element, notification, refcon in
     guard let refcon else { return }
     let manager = Unmanaged<WindowManager>.fromOpaque(refcon).takeUnretainedValue()
     let name = notification as String
+    // Capture the source pid on the callback thread — the element is safe
+    // to touch here but not to retain across the main-queue hop.
+    var pid: pid_t = 0
+    _ = AXUIElementGetPid(element, &pid)
     // Bounce onto the main queue — AX callbacks arrive on the main run loop
     // but nesting a retile inside the callback confuses AXObserver's own
     // internal state on some macOS versions.
-    DispatchQueue.main.async { manager.handleAXNotification(named: name) }
+    DispatchQueue.main.async { manager.handleAXNotification(named: name, from: pid) }
 }
 
 final class WindowManager: NSObject {
@@ -145,6 +149,13 @@ final class WindowManager: NSObject {
             // Attach an AX observer immediately. The window-created callback
             // will fire once the app actually has a window — no timer needed.
             registerAppObserver(for: app)
+            // Pre-seed appsWithWindows so the enumerate fast-path doesn't
+            // skip this app on the imminent retile. CGWindowList sometimes
+            // lags behind window creation by tens of ms, and without this
+            // seed a freshly-launched app never gets queried until an
+            // unrelated event (Cmd-Tab, focus change) forces its pid into
+            // onScreenPIDs.
+            appsWithWindows.insert(app.processIdentifier)
         }
         requestRetile()
     }
@@ -814,12 +825,16 @@ final class WindowManager: NSObject {
 
     // Called from the C callback below. Marked internal so the free
     // function can see it.
-    fileprivate func handleAXNotification(named name: String) {
+    fileprivate func handleAXNotification(named name: String, from pid: pid_t) {
         if name == (kAXWindowMovedNotification as String) {
             pendingRetileAfterDrag = true
             return
         }
         guard Config.shared.current.settings.autoTile else { return }
+        // Any AX notification from an app's observer is proof it has AX
+        // activity — cache the pid so the enumerate fast-path queries it
+        // on the coalesced retile even if CGWindowList hasn't caught up.
+        if pid > 0 { appsWithWindows.insert(pid) }
         requestRetile()
     }
 
