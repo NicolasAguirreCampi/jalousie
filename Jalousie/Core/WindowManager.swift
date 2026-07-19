@@ -76,6 +76,12 @@ final class WindowManager: NSObject {
         execute: { [weak self] in self?.retile() }
     )
 
+    // PIDs we've observed producing at least one managed window this
+    // process lifetime. Combined with CGWindowList's on-screen owner PIDs,
+    // this lets enumerate skip the ~30-40 running apps that never had a
+    // window and stop asking each one for kAXWindowsAttribute every retile.
+    private var appsWithWindows: Set<pid_t> = []
+
     // MARK: - Lifecycle
 
     func start() {
@@ -672,14 +678,12 @@ final class WindowManager: NSObject {
     }
 
     private func collectRawManagedWindows() -> [ManagedWindow] {
-        // Drive from the running-apps list rather than CGWindowList's PID
-        // column: Electron apps (VS Code, Slack, Discord) report their
-        // windows under a helper renderer PID that doesn't resolve back to
-        // a regular NSRunningApplication, so a PID-first enumeration drops
-        // them until the app is Cmd-Tabbed. Instead, iterate regular apps
-        // and use CGWindowList only to check which of their windows are
-        // currently on-screen (excludes minimized, other-space, hidden).
+        // Iterate regular running apps and use CGWindowList only as a
+        // per-window on-screen filter (Electron apps report their windows
+        // under helper-renderer PIDs that don't resolve to a regular
+        // NSRunningApplication, so a PID-first enumeration would drop them).
         let onScreenIDs = collectOnScreenWindowIDs()
+        let onScreenPIDs = collectOnScreenPIDs()
         let blacklist = Set(Config.shared.current.blacklist)
         var results: [ManagedWindow] = []
 
@@ -688,19 +692,50 @@ final class WindowManager: NSObject {
             guard let bundleID = app.bundleIdentifier,
                   !blacklist.contains(bundleID) else { continue }
             let pid = app.processIdentifier
+            // Fast-path skip: don't pay for kAXWindowsAttribute on apps
+            // that have neither a currently on-screen window nor any
+            // history of producing a managed window this session. Cuts
+            // ~30-40 AX round-trips per retile in a typical workstation
+            // where you have Xcode + a browser + Slack + Terminal open
+            // among 70 running apps.
+            if !onScreenPIDs.contains(pid) && !appsWithWindows.contains(pid) {
+                continue
+            }
             let appElement = AXUIElementCreateApplication(pid)
             guard let axWindows: [AXUIElement] = copyAttribute(appElement, kAXWindowsAttribute) else { continue }
 
             let appName = app.localizedName ?? bundleID
+            var foundOne = false
             for window in axWindows {
                 guard let managed = makeManagedWindow(from: window,
                                                       appName: appName,
                                                       bundleID: bundleID),
                       onScreenIDs.contains(managed.windowID) else { continue }
                 results.append(managed)
+                foundOne = true
             }
+            // Cache the pid so we keep querying it on subsequent retiles
+            // even if all its windows go off-screen briefly.
+            if foundOne { appsWithWindows.insert(pid) }
         }
         return results
+    }
+
+    // Owner PIDs of every layer-0 on-screen window. Used as the primary
+    // signal for "which apps should we ask for windows?" before falling
+    // back to appsWithWindows.
+    private func collectOnScreenPIDs() -> Set<pid_t> {
+        let options: CGWindowListOption = [.optionOnScreenOnly, .excludeDesktopElements]
+        guard let list = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[CFString: Any]] else {
+            return []
+        }
+        var pids: Set<pid_t> = []
+        for entry in list {
+            guard let layer = entry[kCGWindowLayer] as? Int, layer == 0,
+                  let pid = entry[kCGWindowOwnerPID] as? pid_t else { continue }
+            pids.insert(pid)
+        }
+        return pids
     }
 
     // MARK: - AX Observers
@@ -749,6 +784,7 @@ final class WindowManager: NSObject {
                               AXObserverGetRunLoopSource(obs),
                               .commonModes)
         appObservers.removeValue(forKey: pid)
+        appsWithWindows.remove(pid)
     }
 
     // Attach destroyed/minimized/deminimized notifications to each managed
