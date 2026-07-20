@@ -319,14 +319,14 @@ final class WindowManager: NSObject {
                                     gap: gap, windows: windows)
 
         var moved = applyRow(windows: windows, widths: widths,
-                             origin: usable.origin, height: usable.height,
-                             gap: gap, zoomedIDs: zoomedWindowIDs, zoomFrame: usable)
+                             usable: usable, gap: gap,
+                             zoomedIDs: zoomedWindowIDs, zoomFrame: usable)
         if learnStubbornWidths(windows: windows, widths: widths, skip: zoomedWindowIDs) {
             widths = allocateWidths(count: count, usable: usable.width,
                                     gap: gap, windows: windows)
             moved += applyRow(windows: windows, widths: widths,
-                              origin: usable.origin, height: usable.height,
-                              gap: gap, zoomedIDs: zoomedWindowIDs, zoomFrame: usable)
+                              usable: usable, gap: gap,
+                              zoomedIDs: zoomedWindowIDs, zoomFrame: usable)
         }
         return (count, moved)
     }
@@ -366,10 +366,11 @@ final class WindowManager: NSObject {
     }
 
     private func applyRow(windows: [ManagedWindow], widths: [CGFloat],
-                          origin: CGPoint, height: CGFloat, gap: CGFloat,
+                          usable: CGRect, gap: CGFloat,
                           zoomedIDs: Set<CGWindowID>, zoomFrame: CGRect) -> Int {
         var moved = 0
-        var x = origin.x
+        var x = usable.origin.x
+        let rightEdge = usable.origin.x + usable.width
         for (i, window) in windows.enumerated() {
             // Zoomed windows take the full zoomFrame instead of their tile.
             // Their tile position (x cursor) still advances so unzoom is a
@@ -378,8 +379,14 @@ final class WindowManager: NSObject {
             if zoomedIDs.contains(window.windowID) {
                 targetFrame = zoomFrame
             } else {
-                targetFrame = CGRect(x: x, y: origin.y,
-                                     width: widths[i], height: height)
+                // Cap width to usable and clamp x so a stubborn window
+                // wider than its share overlaps its left neighbor instead
+                // of falling off the right edge — every window stays fully
+                // visible; user swaps focus to reveal what's underneath.
+                let width = min(widths[i], usable.width)
+                let clampedX = min(x, rightEdge - width)
+                targetFrame = CGRect(x: clampedX, y: usable.origin.y,
+                                     width: width, height: usable.height)
             }
             x += widths[i] + gap
             if framesApproximatelyEqual(window.frame, targetFrame) { continue }
