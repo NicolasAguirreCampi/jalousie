@@ -5,24 +5,50 @@
 <h1 align="center">Jalousie</h1>
 
 <p align="center">
-  A lightweight native macOS tiling window manager built as a proper <code>.app</code> bundle in Swift. Automatically tiles windows into equal horizontal splits with keyboard-driven focus, swap, zoom, and space movement — no scripting additions, no SIP modifications, no third-party dependencies. Works on macOS Tahoe (26.x) with SIP enabled.
+  A lightweight native macOS tiling window manager built as a proper <code>.app</code> bundle in Swift. Automatic horizontal tiling driven entirely from the keyboard — no scripting additions, no SIP modifications, no third-party dependencies. Works on macOS Tahoe (26.x) with SIP enabled.
 </p>
 
 ---
 
-## Features
+## Core features
 
-- **Auto-tile** every user window into equal horizontal splits on each display, per-monitor.
-- **Adaptive widths** for apps with hard-coded minimums (Xcode, Discord, Slack) — they get their floor, everyone else equal-shares the remainder instead of overlapping.
-- **Focus left/right** across the tiled slot order.
-- **Swap left/right** — trade the focused window with its neighbor.
-- **Zoom-fullscreen** toggle — any window can be expanded to its display's full frame while keeping its slot in memory; focus/swap still traverses the underlying order. Multiple windows can be zoomed at once.
-- **Send window to space N** — works on macOS 26 via the private bridged-operation path (no scripting addition, no SIP off).
-- **Multi-monitor** — drag windows between displays and each screen re-tiles independently.
-- **Drag-to-move**, then release — the mouse-up flushes a single retile that snaps the window back to its slot.
-- **Config hot-reload** — edit `~/.config/jalousie/config.json`, hit "Reload config", changes take effect immediately.
+### Auto-tile on launch
+
+Every user window snaps into an equal horizontal split the moment it opens. Apps with hard-coded minimum widths (Xcode, Discord, Slack) get their floor; the remainder is equal-shared across the other slots instead of overlapping the screen edge.
+
+![Auto-tile on app launch](assets/open-apps.gif)
+
+### Focus left / right
+
+Traverse the tiled slot order from the keyboard. Focus follows the visual left-to-right order on the current display, not window z-order.
+
+![Focus left / right](assets/re-focus.gif)
+
+### Drag-to-move, snap-back retile
+
+Drag any window with the mouse; on release, a single retile flushes and everything snaps back into slot order. Drag a window across displays and each screen re-tiles independently.
+
+![Drag and re-tile](assets/move-window.gif)
+
+### Zoom-fullscreen toggle
+
+Expand the focused window to fill its display while keeping its slot in memory. Focus and swap still traverse the underlying order beneath the zoomed window, and multiple windows can be zoomed at once.
+
+![Zoom to fullscreen](assets/maximize-window.gif)
+
+### Send window to another space
+
+Move the focused window to space 1–5 via the private bridged-operation path — works on macOS 26 without a scripting addition and without disabling SIP.
+
+![Send window to another space](assets/send-to-another-desktop.gif)
+
+## Other features
+
+- **Swap left / right** — trade the focused window with its neighbor.
+- **Multi-monitor** — each display tiles independently.
+- **Config hot-reload** — edit `~/.config/jalousie/config.json`, hit "Reload config", changes apply immediately.
 - **App blacklist** — apps you never want tiled.
-- **No timers, no polling, no animations** — every reaction is AXObserver- or NSEvent-driven.
+- **No timers, no polling, no animations** — every reaction is `AXObserver`- or `NSEvent`-driven.
 
 ## Default hotkeys
 
@@ -34,7 +60,42 @@
 | `Option + Shift + E` | Manual retile |
 | `Option + Shift + 1..5` | Send focused window to space 1..5 |
 
-All bindings are re-mappable in `~/.config/jalousie/config.json`.
+## Custom hotkeys config
+
+Every binding is re-mappable in `~/.config/jalousie/config.json`. Modifiers accept `"option"`, `"shift"`, `"command"`, `"control"`. Keys are single characters or digits.
+
+```json
+{
+  "hotkeys": {
+    "focus-left":             { "key": "j", "modifiers": ["option"] },
+    "focus-right":            { "key": "l", "modifiers": ["option"] },
+    "swap-left":              { "key": "j", "modifiers": ["option", "shift"] },
+    "swap-right":             { "key": "l", "modifiers": ["option", "shift"] },
+    "toggle-zoom-fullscreen": { "key": "m", "modifiers": ["option", "shift"] },
+    "retile":                 { "key": "e", "modifiers": ["option", "shift"] },
+    "send-to-space-1":        { "key": "1", "modifiers": ["option", "shift"] },
+    "send-to-space-2":        { "key": "2", "modifiers": ["option", "shift"] },
+    "send-to-space-3":        { "key": "3", "modifiers": ["option", "shift"] },
+    "send-to-space-4":        { "key": "4", "modifiers": ["option", "shift"] },
+    "send-to-space-5":        { "key": "5", "modifiers": ["option", "shift"] }
+  },
+  "blacklist": [
+    "com.apple.finder",
+    "com.apple.systempreferences",
+    "com.apple.ActivityMonitor",
+    "com.apple.Terminal",
+    "com.apple.calculator"
+  ],
+  "settings": {
+    "autoTile": true,
+    "tileOnSpaceSwitch": true,
+    "windowGap": 0,
+    "ignoreSingleWindow": false
+  }
+}
+```
+
+Save, then click **Reload config** in the menu bar dropdown.
 
 ## Build & install
 
